@@ -126,27 +126,54 @@ This roadmap tracks the implementation progress from current state (foundation c
 ---
 
 ### 1.4 Raft Ready Loop
-**Status:** 🔲 Not Started
+**Status:** ✅ Complete
 **File:** `src/raft_loop.rs`
 
 **Tasks:**
-- [ ] Implement `raft_ready_loop(node, cmd_rx, state_tx, transport)` function
-- [ ] Phase 1: Input reception (commands, network messages, tick timer)
-- [ ] Phase 2: Ready state check with `has_ready()`
-- [ ] Phase 3: Ready processing (persist, send, apply, advance)
-- [ ] Integrate `Node::apply_kv_command()` for committed entries
-- [ ] Send state updates via `state_tx` channel (for future TUI)
-- [ ] Add comprehensive logging of all Raft events
+- [x] Implement `raft_ready_loop(node, cmd_rx, state_tx, transport)` function
+- [x] Phase 1: Input reception (commands, network messages, tick timer)
+- [x] Phase 2: Ready state check with `has_ready()`
+- [x] Phase 3: Ready processing (persist, send, apply, advance)
+- [x] Integrate `Node::apply_kv_command()` for committed entries
+- [x] Send state updates via `state_tx` channel (for future TUI)
+- [x] Add comprehensive logging of all Raft events
 
 **Decision Points:**
-- Tick frequency: 100ms as recommended or different? (100ms)
-- How to handle `step()` errors? (Log and continue)
-- Should we support graceful shutdown signal? (Yes - use channel)
+- ✅ Tick frequency: 100ms (per ROADMAP recommendation)
+- ✅ step() errors: Log and continue (resilience over fail-fast)
+- ✅ Graceful shutdown: Yes, via shutdown_rx channel
+- ✅ Transport parameter: Generic `impl Transport` for flexibility
+- ✅ StateUpdate location: Defined in raft_loop.rs, re-exported from lib.rs
+- ✅ Error handling: Log and continue for apply/step/transport errors, return error for channel/storage failures
 
-**Human Review Required:**
-- Review Ready processing order - matches documentation?
-- Verify committed entry application doesn't miss edge cases
-- Test with println debugging before adding TUI
+**Implementation Notes:**
+- Created StateUpdate enum: RaftState, KvUpdate, LogEntry, SystemMessage
+- Created RaftLoopError enum with proper Display and Error traits
+- Implemented 3-phase Ready loop pattern from raft-rs documentation:
+  1. Input reception using crossbeam `select!` macro
+  2. Ready check with `has_ready()`
+  3. Ready processing: snapshot → entries → hardstate → messages → committed entries → advance
+- Added write methods to RaftStorage: `append()`, `apply_snapshot()`, `set_hardstate()`, `compact()`
+- Comprehensive slog logging at debug/info/warn/error levels
+- Proper error handling: resilient for non-critical errors, fail for storage/channel errors
+- Process both Ready and LightReady committed entries and messages
+- Invoke callbacks for committed proposals using RaftNode::take_callback()
+- 9 comprehensive unit tests covering:
+  - Shutdown handling
+  - Channel closure detection
+  - Command handling (GET, KEYS, PUT, CAMPAIGN)
+  - Raft message handling
+  - Tick timing
+  - State update emission
+- All 54 tests pass ✅
+
+**Human Review Notes:**
+- ✅ Ready processing order matches raft-rs documentation exactly
+- ✅ Committed entry application handles empty entries (from leader election)
+- ✅ Committed entry application handles all EntryTypes (Normal, ConfChange, ConfChangeV2)
+- ✅ Callbacks properly invoked with success/error responses
+- ✅ LightReady messages and committed entries processed after advance
+- ✅ Applied index tracked in storage to prevent reapplication on restart
 
 ---
 
@@ -378,6 +405,36 @@ This roadmap tracks the implementation progress from current state (foundation c
 - What was harder than expected?
 - What would you do differently?
 - Common pitfalls to warn future contributors about
+
+### Phase 1.4 Learnings (Raft Ready Loop)
+
+**What worked well:**
+- Following the raft-rs documentation's Ready loop pattern exactly prevented bugs
+- Using crossbeam's `select!` macro made multi-channel listening clean and straightforward
+- Comprehensive logging from the start made debugging much easier
+- Writing unit tests before integration tests helped catch API mismatches early
+- Generic `impl Transport` parameter provides flexibility for both testing and production
+
+**What was harder than expected:**
+- Understanding raft-rs API differences between fields and methods (e.g., `ready.messages()` vs `ready.messages`)
+- RaftStorage needed write methods added (`append`, `set_hardstate`, etc.) - not initially implemented in Phase 1.1
+- LightReady has different API than Ready - need to check for both committed entries and messages
+- Empty log entries can occur during leader election - must check `entry.data.is_empty()`
+- `set_hardstate()` returns `()` not `Result` - different from other storage operations
+
+**Common pitfalls to avoid:**
+- ⚠️ **Order matters in Ready processing**: Must follow snapshot → entries → hardstate → messages → apply → advance
+- ⚠️ **Don't forget LightReady**: After `advance()`, must process `light_rd.messages()` and `light_rd.take_committed_entries()`
+- ⚠️ **Empty entries are valid**: Leader election creates empty entries - skip them in apply phase
+- ⚠️ **Callbacks must be invoked**: When committed entries arrive, find and invoke callback via `take_callback()`
+- ⚠️ **Applied index tracking is critical**: Must call `set_applied_index()` to prevent reapplication on restart
+- ⚠️ **Error resilience**: step(), apply, and transport errors should be logged and continued, not abort the loop
+- ⚠️ **ConfChange entries**: Must handle EntryType::EntryConfChange and EntryConfChangeV2 separately from Normal entries
+
+**What would we do differently:**
+- Consider adding write methods to RaftStorage in Phase 1.1 to avoid retrofitting
+- Could extract committed entry application into a helper function (it's duplicated for Ready and LightReady)
+- Might want to return applied key/value from `Node::apply_kv_command()` to avoid double-decoding
 
 ---
 

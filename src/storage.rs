@@ -45,6 +45,26 @@ impl RaftStorage {
     pub fn inner(&self) -> &MemStorage {
         &self.inner
     }
+
+    /// Append entries to the log.
+    pub fn append(&mut self, entries: &[Entry]) -> RaftResult<()> {
+        self.inner.wl().append(entries)
+    }
+
+    /// Apply a snapshot to the storage.
+    pub fn apply_snapshot(&mut self, snapshot: Snapshot) -> RaftResult<()> {
+        self.inner.wl().apply_snapshot(snapshot)
+    }
+
+    /// Set the HardState (term, vote, commit).
+    pub fn set_hardstate(&mut self, hs: HardState) {
+        self.inner.wl().set_hardstate(hs);
+    }
+
+    /// Compact the log up to the given index.
+    pub fn compact(&mut self, compact_index: u64) -> RaftResult<()> {
+        self.inner.wl().compact(compact_index)
+    }
 }
 
 impl Storage for RaftStorage {
