@@ -10,7 +10,6 @@ pub enum UserCommand {
 }
 
 /// Simple parser for REPL commands.
-/// (Later this will live in your UI module, but for now this keeps it self-contained.)
 pub fn parse_command(input: &str) -> Option<UserCommand> {
     let mut parts = input.split_whitespace();
     let cmd = parts.next()?.to_ascii_uppercase();

@@ -1,4 +1,3 @@
-use prost::Message;
 use raft_a_tui::kvproto::{KvCommand, Put, kv_command};
 use raft_a_tui::codec::{encode, decode};
 
