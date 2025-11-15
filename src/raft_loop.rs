@@ -223,6 +223,7 @@ pub fn raft_ready_loop<T: Transport>(
                "has_snapshot" => !ready.snapshot().is_empty(),
                "num_entries" => ready.entries().len(),
                "num_messages" => ready.messages().len(),
+               "num_persisted_messages" => ready.persisted_messages().len(),
                "num_committed" => ready.committed_entries().len());
 
         // 1. Apply snapshot if present
@@ -261,15 +262,15 @@ pub fn raft_ready_loop<T: Transport>(
             raft_node.raw_node_mut().mut_store().set_hardstate(hs.clone());
         }
 
-        // 4. Send messages to peers (AFTER persistence!)
+        // 4. Send regular messages to peers (can be sent before persistence completes)
         let messages = ready.take_messages();
         if !messages.is_empty() {
-            debug!(logger, "Sending messages to peers"; "count" => messages.len());
+            debug!(logger, "Sending regular messages to peers"; "count" => messages.len());
 
             for msg in messages {
                 let to = msg.to;
                 if let Err(e) = transport.send(to, msg) {
-                    warn!(logger, "Failed to send message to peer";
+                    warn!(logger, "Failed to send regular message to peer";
                           "peer" => to,
                           "error" => format!("{}", e));
                     // Log but continue - transport errors are non-fatal
@@ -278,7 +279,22 @@ pub fn raft_ready_loop<T: Transport>(
             }
         }
 
-        // 5. Apply committed entries to state machine
+        // 5. Send persisted messages to peers (MUST be sent AFTER persistence!)
+        let persisted_messages = ready.take_persisted_messages();
+        if !persisted_messages.is_empty() {
+            debug!(logger, "Sending persisted messages to peers"; "count" => persisted_messages.len());
+
+            for msg in persisted_messages {
+                let to = msg.to;
+                if let Err(e) = transport.send(to, msg) {
+                    warn!(logger, "Failed to send persisted message to peer";
+                          "peer" => to,
+                          "error" => format!("{}", e));
+                }
+            }
+        }
+
+        // 6. Apply committed entries to state machine
         let committed_entries = ready.take_committed_entries();
         if !committed_entries.is_empty() {
             for entry in committed_entries {
@@ -363,14 +379,14 @@ pub fn raft_ready_loop<T: Transport>(
             }
         }
 
-        // 6. Send Raft state update to TUI
+        // 7. Send Raft state update to TUI
         let raft_state = raft_node.get_state();
         if let Err(_) = state_tx.send(StateUpdate::RaftState(raft_state.clone())) {
             // TUI might be gone, but Raft continues
             debug!(logger, "Failed to send state update (TUI disconnected?)");
         }
 
-        // 7. Advance to next Ready cycle
+        // 8. Advance to next Ready cycle
         let mut light_rd = raft_node.raw_node_mut().advance(ready);
 
         // Process LightReady (additional messages and committed entries)
