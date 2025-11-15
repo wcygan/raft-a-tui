@@ -104,6 +104,7 @@ pub fn raft_ready_loop<T: Transport>(
 
     let tick_duration = Duration::from_millis(100);
     let mut tick_timer = Instant::now();
+    let mut previous_leader_id: Option<u64> = None;
 
     loop {
         // Calculate timeout until next tick
@@ -152,9 +153,24 @@ pub fn raft_ready_loop<T: Transport>(
                                     ));
                                 }
                             }
-                            // Other commands (GET, KEYS, STATUS) are read-only
+                            // STATUS displays current Raft state
+                            UserCommand::Status => {
+                                let state = raft_node.get_state();
+                                let status_msg = format!(
+                                    "STATUS:\n  Node ID: {}\n  Term: {}\n  Role: {:?}\n  Leader ID: {}\n  Cluster Size: {} nodes\n  Commit Index: {}\n  Applied Index: {}",
+                                    state.node_id,
+                                    state.term,
+                                    state.role,
+                                    state.leader_id,
+                                    state.cluster_size,
+                                    state.commit_index,
+                                    state.applied_index
+                                );
+                                let _ = state_tx.send(StateUpdate::SystemMessage(status_msg));
+                            }
+                            // Other commands (GET, KEYS) are read-only
                             // They don't go through Raft - just read local state
-                            _ => {
+                            UserCommand::Get { .. } | UserCommand::Keys => {
                                 debug!(logger, "Read-only command, applying locally");
                                 // Apply locally (doesn't mutate Raft state)
                                 let output = kv_node.apply_user_command(cmd);
@@ -381,6 +397,30 @@ pub fn raft_ready_loop<T: Transport>(
 
         // 7. Send Raft state update to TUI
         let raft_state = raft_node.get_state();
+
+        // Detect leadership changes
+        // Only log when we GET a new leader (skip intermediate "lost leader" state)
+        if let Some(prev_leader) = previous_leader_id {
+            if prev_leader != raft_state.leader_id && raft_state.leader_id != 0 {
+                let msg = if prev_leader == 0 {
+                    format!("New leader elected: {} (term {})", raft_state.leader_id, raft_state.term)
+                } else {
+                    format!(
+                        "Leadership changed: {} → {} (term {})",
+                        prev_leader,
+                        raft_state.leader_id,
+                        raft_state.term
+                    )
+                };
+                info!(logger, "Leadership changed";
+                      "previous_leader" => prev_leader,
+                      "new_leader" => raft_state.leader_id,
+                      "term" => raft_state.term);
+                let _ = state_tx.send(StateUpdate::SystemMessage(msg));
+            }
+        }
+        previous_leader_id = Some(raft_state.leader_id);
+
         if let Err(_) = state_tx.send(StateUpdate::RaftState(raft_state.clone())) {
             // TUI might be gone, but Raft continues
             debug!(logger, "Failed to send state update (TUI disconnected?)");

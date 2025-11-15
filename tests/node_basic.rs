@@ -39,6 +39,9 @@ fn test_keys_sorted() {
 
 #[test]
 fn test_status() {
+    // NOTE: In the real Raft integration, STATUS is handled by raft_loop.rs
+    // and never reaches Node::apply_user_command(). This test verifies the
+    // fallback behavior when Node is used in isolation (e.g., for testing).
     let mut node = Node::new();
     let out = node.apply_user_command(UserCommand::Status);
     assert_eq!(out, Text("STATUS: standalone node".into()));

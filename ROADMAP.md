@@ -29,247 +29,159 @@ This roadmap tracks the implementation progress from current state (foundation c
 
 ---
 
-## Phase 1: Raft Core Integration
+## 🚨 CRITICAL: Phase 1.6 - Crash Recovery (HIGHEST PRIORITY)
 
-**Goal:** Get Raft consensus working with 3 nodes (no TUI yet - logs to stdout/tests)
+**Status:** 🔄 In Progress
+**Goal:** Fix node crash/restart panic and enable production-ready crash recovery
 
-### 1.1 Storage Layer
-**Status:** ✅ Complete
-**File:** `src/storage.rs`
+**Problem Discovered:**
+- Nodes panic with `to_commit X is out of range [last_index 0]` when:
+  - Starting a new node to join existing cluster (node starts with empty log)
+  - Node crashes and restarts after cluster has committed entries
+  - Leader sends commit_index before sending actual log entries
+- Root cause: Missing snapshot handling in Ready loop
 
-**Tasks:**
-- [x] Create `RaftStorage` struct wrapping `MemStorage`
-- [x] Add `applied_index` tracking (critical for restart safety)
-- [x] Implement `Storage` trait by delegating to `MemStorage`
-- [x] Add helper methods: `applied_index()`, `set_applied_index()`
-- [x] Write unit tests for applied_index persistence logic
+**Solution Architecture:**
+Requires BOTH snapshot handling (prevents panic) AND persistent storage (enables crash recovery):
 
-**Decision Points:**
-- ✅ Use MemStorage directly for HardState persistence
-- ✅ No custom snapshot logic yet (delegate to MemStorage)
-- ✅ Use Arc<Mutex<u64>> for applied_index (thread-safe, shareable)
-
-**Implementation Notes:**
-- Used Arc<Mutex<u64>> for applied_index to enable sharing across clones
-- Implemented Clone trait to share both inner MemStorage and applied_index
-- Added 7 tests covering: get/set, clone sharing, ConfState initialization, Storage trait delegation
-- All tests pass ✅
-
----
-
-### 1.2 Network Layer (Local Transport)
-**Status:** ✅ Complete
-**File:** `src/network.rs`
-
-**Tasks:**
-- [x] Define `Transport` trait with `send(to: u64, msg: Message)` method
-- [x] Implement `LocalTransport` using `HashMap<u64, Sender<Message>>`
-- [x] Message routing (Raft messages are already protobuf-compatible)
-- [x] Write tests for message routing between 3 mock nodes
-- [ ] Peer discovery from CLI `--peers` argument (deferred to Phase 1.5)
-
-**Decision Points:**
-- ✅ Use `try_send()` (non-blocking) - returns error on full channel
-- ✅ Return `Result<(), TransportError>` - let Ready loop decide how to handle
-- ✅ Store `node_id` in LocalTransport for better error messages
-- ✅ Use bounded channel (100 messages) to prevent memory issues
-- ✅ Simple constructor taking `HashMap<u64, Sender<Message>>` - Phase 1.5 will parse CLI args
-
-**Implementation Notes:**
-- Created `TransportError` enum: PeerNotFound, ChannelFull, ChannelClosed
-- `LocalTransport` uses crossbeam bounded channels for in-memory messaging
-- Added helper methods: `node_id()`, `peer_count()`, `has_peer()`
-- 9 comprehensive tests covering:
-  - Basic message sending
-  - Error cases (peer not found, channel full, channel closed)
-  - 3-node full mesh routing
-  - Helper methods and error display
-- All tests pass ✅
-
----
-
-### 1.3 Raft Node Wrapper
-**Status:** ✅ Complete
-**File:** `src/raft_node.rs`
-
-**Tasks:**
-- [x] Create `RaftNode` struct containing `RawNode`, `Storage`, callbacks
-- [x] Implement `new(id, peers, storage, logger)` constructor with Config setup
-- [x] Add `propose_command(key, value)` method returning `Receiver<CommandResponse>`
-- [x] Implement callback tracking: `HashMap<Vec<u8>, Sender<CommandResponse>>`
-- [x] Add helper methods: `get_state() -> RaftState`, `is_leader() -> bool`
-- [x] Write tests for RaftNode initialization and basic operations
-
-**Decision Points:**
-- ✅ Use UUID (uuid v4) for callback IDs - globally unique, no collisions
-- ✅ Use CommandResponse enum (Success/Error) instead of simple Result
-- ✅ Take slog::Logger as constructor parameter for flexible logging
-- ✅ Config values: heartbeat_tick=3, election_tick=10, check_quorum=true, pre_vote=true
-
-**Implementation Notes:**
-- Created CommandResponse enum: Success{key, value}, Error(String)
-- RaftNode wraps RawNode with callback tracking via UUID-keyed HashMap
-- Constructor initializes MemStorage with ConfState before creating RawNode
-- propose_command() generates UUID, stores callback, proposes to Raft
-- Added RaftState struct to expose: node_id, term, role, leader_id, commit_index, applied_index
-- Helper methods: get_state(), is_leader(), logger(), raw_node(), take_callback()
-- 11 comprehensive tests in tests/raft_node_basic.rs:
-  - Initialization (single & 3-node clusters)
-  - Initial state verification
-  - Leadership checks
-  - Proposal API (handles ProposalDropped when not leader)
-  - Helper method verification
-  - Equality tests for CommandResponse and RaftState
-- All tests pass ✅
-- Added uuid dependency to Cargo.toml
-
----
-
-### 1.4 Raft Ready Loop
-**Status:** ✅ Complete
+### 1.6.1 Snapshot Handling in Ready Loop
+**Status:** 🔲 Not Started
 **File:** `src/raft_loop.rs`
+**Priority:** CRITICAL - Prevents node startup panic
 
 **Tasks:**
-- [x] Implement `raft_ready_loop(node, cmd_rx, state_tx, transport)` function
-- [x] Phase 1: Input reception (commands, network messages, tick timer)
-- [x] Phase 2: Ready state check with `has_ready()`
-- [x] Phase 3: Ready processing (persist, send, apply, advance)
-- [x] Integrate `Node::apply_kv_command()` for committed entries
-- [x] Send state updates via `state_tx` channel (for future TUI)
-- [x] Add comprehensive logging of all Raft events
+- [ ] Add snapshot handling in Ready processing (BEFORE entries append)
+- [ ] Extract snapshot data and restore state machine via `Node::restore_from_snapshot()`
+- [ ] Update applied_index from snapshot metadata
+- [ ] Add comprehensive logging for snapshot application
+- [ ] Test snapshot reception with mock RawNode
+- [ ] Test state machine restoration from snapshot bytes
+
+**Implementation Pattern:**
+```rust
+// In Ready processing, FIRST check for snapshot:
+if !ready.snapshot().is_empty() {
+    let snapshot = ready.snapshot();
+    storage.apply_snapshot(snapshot.clone())?;
+
+    // Restore state machine from snapshot data
+    let snapshot_data = snapshot.get_data();
+    node.restore_from_snapshot(snapshot_data)?;
+
+    // Update applied index
+    applied_index = snapshot.get_metadata().index;
+    storage.set_applied_index(applied_index)?;
+}
+```
 
 **Decision Points:**
-- ✅ Tick frequency: 100ms (per ROADMAP recommendation)
-- ✅ step() errors: Log and continue (resilience over fail-fast)
-- ✅ Graceful shutdown: Yes, via shutdown_rx channel
-- ✅ Transport parameter: Generic `impl Transport` for flexibility
-- ✅ StateUpdate location: Defined in raft_loop.rs, re-exported from lib.rs
-- ✅ Error handling: Log and continue for apply/step/transport errors, return error for channel/storage failures
-
-**Implementation Notes:**
-- Created StateUpdate enum: RaftState, KvUpdate, LogEntry, SystemMessage
-- Created RaftLoopError enum with proper Display and Error traits
-- Implemented 3-phase Ready loop pattern from raft-rs documentation:
-  1. Input reception using crossbeam `select!` macro
-  2. Ready check with `has_ready()`
-  3. Ready processing: snapshot → entries → hardstate → messages → committed entries → advance
-- Added write methods to RaftStorage: `append()`, `apply_snapshot()`, `set_hardstate()`, `compact()`
-- Comprehensive slog logging at debug/info/warn/error levels
-- Proper error handling: resilient for non-critical errors, fail for storage/channel errors
-- Process both Ready and LightReady committed entries and messages
-- Invoke callbacks for committed proposals using RaftNode::take_callback()
-- 14 comprehensive unit tests covering:
-  - Shutdown handling (graceful shutdown, channel closure detection)
-  - Command handling (GET, KEYS, PUT, CAMPAIGN)
-  - Raft message handling (step, heartbeats)
-  - Tick timing verification
-  - State update emission (RaftState, KvUpdate, LogEntry)
-  - **Single-node commit flow (propose → commit → apply → state update)**
-  - **Multiple commands producing state updates**
-  - **Transport failure resilience (loop continues despite send errors)**
-  - **Malformed entry handling structure**
-  - **Read-only commands bypass Raft (GET, KEYS, STATUS)**
-- All 59 tests pass ✅
-
-**Human Review Notes:**
-- ✅ Ready processing order matches raft-rs documentation exactly
-- ✅ Committed entry application handles empty entries (from leader election)
-- ✅ Committed entry application handles all EntryTypes (Normal, ConfChange, ConfChangeV2)
-- ✅ Callbacks properly invoked with success/error responses
-- ✅ LightReady messages and committed entries processed after advance
-- ✅ Applied index tracked in storage to prevent reapplication on restart
+- Snapshot serialization format? (bincode for now - simple, fast)
+- Should Node::restore_from_snapshot() clear existing state? (Yes - snapshot is authoritative)
+- How to encode BTreeMap in snapshot? (bincode serialize directly)
 
 ---
 
-### 1.5 CLI Integration & 3-Node Test
-**Status:** ✅ Complete
-**Files:** `src/main.rs`, `src/cli.rs`, `src/tcp_transport.rs`, `tests/three_node_cluster.rs`
+### 1.6.2 Node Snapshot Methods
+**Status:** 🔲 Not Started
+**File:** `src/node.rs`
+**Priority:** CRITICAL - Required for snapshot handling
 
 **Tasks:**
-- [x] Add clap argument parsing: `--id <u64>`, `--peers <peer_list>`
-- [x] Parse peer format: `1=127.0.0.1:6001,2=127.0.0.1:6002,3=127.0.0.1:6003`
-- [x] Implement TcpTransport for real multi-process networking
-- [x] Wire up: Storage → RaftNode → raft_ready_loop → TcpTransport
-- [x] Add non-blocking command loop using crossterm (event polling)
-- [x] Write integration test spawning 3 Raft instances
-- [x] Test: Leader election, log replication, PUT command commit
-- [x] Fix logging to go to files instead of stdout
+- [ ] Add `Node::create_snapshot() -> Vec<u8>` - serializes BTreeMap to bytes
+- [ ] Add `Node::restore_from_snapshot(data: &[u8]) -> Result<()>` - deserializes and replaces state
+- [ ] Add bincode dependency to Cargo.toml
+- [ ] Write tests for snapshot roundtrip (create → restore → verify state)
+- [ ] Test error handling for malformed snapshot data
 
 **Decision Points:**
-- ✅ Transport choice: Implemented TCP transport now (not deferred to Phase 3)
-- ✅ Input handling: Non-blocking stdin with crossterm (event::poll with 50ms timeout)
-- ✅ Test scope: Full consensus verification with leader election and replication
-- ✅ Logging strategy: slog to `node-{id}.log` files, removed raft's default-logger feature
-- ✅ Terminal UI: Clean output to stderr for startup messages, all debug logs to files
+- Should snapshot include metadata (version, checksum)? (Not yet - keep simple)
+- Handle backwards compatibility? (Not yet - Phase 3 concern)
 
-**Implementation Notes:**
+---
 
-**src/cli.rs** (173 lines):
-- Clap-based CLI with `--id` and `--peers` arguments
-- `parse_peers()` function parses "1=127.0.0.1:6001,2=..." format
-- Validates peer format and socket addresses
-- Returns `HashMap<u64, SocketAddr>` for easy lookup
-- 10 comprehensive unit tests covering valid/invalid inputs
+### 1.6.3 Persistent Storage Implementation
+**Status:** 🔲 Not Started
+**File:** `src/disk_storage.rs` (new)
+**Priority:** HIGH - Enables crash recovery after snapshot handling works
 
-**src/tcp_transport.rs** (414 lines):
-- Multi-threaded TCP transport implementation
-- Listener thread: Accepts incoming connections, deserializes messages, forwards to msg_rx
-- Sender thread: Dequeues from channel, connects to peer, sends with retry logic
-- Message framing: 4-byte length prefix (big-endian u32) + protobuf bytes
-- Implements `Transport` trait with proper error handling
-- **Prost compatibility**: raft uses prost 0.11, project uses prost 0.14
-  - Solution: Added `prost_011 = { package = "prost", version = "0.11.9" }` to Cargo.toml
-  - Used explicit trait imports: `use prost_011::Message as ProstMessage011;`
-- Retry logic: 3 attempts with 10ms delay, 100ms connection timeout
-- Message size validation: Max 10MB sanity check
-- 3 unit tests for serialization roundtrip and length prefix validation
+**Tasks:**
+- [ ] Create `DiskStorage` struct wrapping sled database
+- [ ] Implement `Storage` trait for DiskStorage
+- [ ] Persist HardState (term, vote, commit) on every change
+- [ ] Persist log entries with append operations
+- [ ] Persist snapshots to disk
+- [ ] Persist applied_index separately
+- [ ] Add recovery logic: `DiskStorage::open(path) -> Result<Self>`
+- [ ] Add CLI flag: `--data-dir <path>` (default: `./data/node-{id}`)
+- [ ] Write tests for crash recovery scenarios
 
-**src/main.rs** (279 lines):
-- Complete component wiring with channels for cmd, msg, state, shutdown
-- Non-blocking command loop with crossterm:
-  - `event::poll(Duration::from_millis(50))` for responsive updates
-  - Handles Ctrl+C, Ctrl+D, Enter, Backspace, regular character input
-  - Drains state updates in loop for real-time feedback
-- Logging to files:
-  - `setup_logger()` writes to `node-{id}.log` using slog
-  - Removed raft's "default-logger" feature to prevent stdout spam
-  - Changed all startup messages from `println!` to `eprintln!` (goes to stderr)
-  - Added `node-*.log` to .gitignore
-- Spawns Raft ready loop in background thread
-- Graceful shutdown handling with join
+**Storage Layout:**
+```
+data/node-1/
+  ├── hardstate     # Current term, vote, commit (atomic writes)
+  ├── entries/      # Log entries (indexed by log index)
+  ├── snapshots/    # State machine snapshots (indexed by index)
+  └── meta          # applied_index, cluster config
+```
 
-**tests/three_node_cluster.rs** (345 lines):
-- Full 3-node cluster setup using LocalTransport (deterministic for testing)
-- TestNode helper struct with channels for commands and state updates
-- Helper functions:
-  - `wait_for_leader()` - Polls for leader election with timeout
-  - `wait_for_replication()` - Verifies all nodes have key-value pair
-- Two tests:
-  1. `test_three_node_cluster_basic_setup` - Verifies nodes start up
-  2. `test_three_node_consensus_full` (#[ignore]) - Full consensus test:
-     - Leader election within 5 seconds
-     - Single PUT command replication
-     - Multiple PUT commands (5 total) replicate to all nodes
-- All tests pass ✅ (74 total: 73 run + 1 ignored)
+**Decision Points:**
+- Storage backend? (sled - pure Rust, embedded, crash-safe)
+- Snapshot compaction trigger? (Manual via SNAPSHOT command first, auto later)
+- Log compaction strategy? (Keep all entries initially, add compaction in Phase 3)
 
-**Dependencies Added:**
-- `clap = { version = "4.5.51", features = ["derive"] }`
-- `crossterm = "0.29"`
-- `prost_011 = { package = "prost", version = "0.11.9" }`
-- Modified raft: `default-features = false, features = ["prost-codec"]`
+---
+
+### 1.6.4 Integration & Testing
+**Status:** 🔲 Not Started
+**Files:** `src/main.rs`, `tests/crash_recovery.rs`
+**Priority:** HIGH - Validates crash recovery works end-to-end
+
+**Tasks:**
+- [ ] Add `--data-dir` CLI argument
+- [ ] Wire DiskStorage into main.rs (replace MemStorage)
+- [ ] Test: Start node → commit entries → kill → restart → verify state recovered
+- [ ] Test: 3-node cluster → kill follower → restart → verify catches up
+- [ ] Test: 3-node cluster → kill leader → restart → verify re-joins
+- [ ] Test: New node joins existing cluster → receives snapshot → catches up
 
 **Human Review Required:**
-- [ ] Manually test 3-node cluster with cargo run instances
-- [ ] Verify elections work, logs replicate correctly
-- [ ] Check STATUS command shows actual Raft state
-
-**Milestone:** ✅ Phase 1 implementation complete! Can run 3 processes, submit PUT commands, see replication in logs. Manual testing remains.
+- [ ] Manually test node crash and restart
+- [ ] Verify logs show snapshot application
+- [ ] Confirm no data loss after crashes
 
 ---
 
-## Phase 2: TUI Visualization
+## Phase 1: Raft Core Integration ✅
+
+**Goal:** Get Raft consensus working with 3 nodes (no TUI yet - logs to files)
+**Status:** ✅ Complete (Phases 1.1-1.5)
+
+**Completed Components:**
+- ✅ 1.1 Storage Layer (`src/storage.rs`) - RaftStorage wrapping MemStorage with applied_index tracking
+- ✅ 1.2 Network Layer (`src/network.rs`) - LocalTransport with crossbeam channels for testing
+- ✅ 1.3 Raft Node Wrapper (`src/raft_node.rs`) - RaftNode wrapping RawNode with callback tracking
+- ✅ 1.4 Raft Ready Loop (`src/raft_loop.rs`) - 3-phase Ready loop with state updates
+- ✅ 1.5 CLI Integration (`src/main.rs`, `src/cli.rs`, `src/tcp_transport.rs`) - TCP transport, clap CLI, 3-node tests
+
+**Key Implementation Details:**
+- Storage: Arc<Mutex<u64>> for applied_index, 7 storage tests
+- Network: Transport trait with LocalTransport + TcpTransport implementations, retry logic, message framing
+- RaftNode: UUID-based callback tracking, RaftState exposure, 11 unit tests
+- Ready Loop: 3-phase pattern (input → ready → process), handles empty entries, 14 unit tests
+- CLI: Clap parsing, TCP transport with prost 0.11 compatibility, file logging, 74 total tests
+
+**Known Limitation (Addressed in Phase 1.6):**
+- ⚠️ **Missing snapshot handling** - Nodes panic when joining existing cluster or restarting after downtime
+- Using MemStorage only - No crash recovery yet
+
+---
+
+## Phase 2: TUI Visualization (DEPRIORITIZED)
 
 **Goal:** Replace stdin with interactive TUI showing real-time Raft state
+**Status:** 🔲 Deferred until Phase 1.6 complete
+
+> **Note:** Phase 2 is postponed until crash recovery (Phase 1.6) is complete. The current panic bug makes the system unusable for anything beyond basic testing. Snapshot handling and persistent storage are prerequisites for a stable TUI experience.
 
 ### 2.1 TUI State & Updates
 **Status:** 🔲 Not Started
@@ -386,9 +298,12 @@ This roadmap tracks the implementation progress from current state (foundation c
 
 ---
 
-## Phase 3: Polish & Advanced Features
+## Phase 3: Polish & Advanced Features (DEPRIORITIZED)
 
 **Goal:** Production-ready features and enhanced UX
+**Status:** 🔲 Deferred until Phase 1.6 and Phase 2 complete
+
+> **Note:** Phase 3.4 (Persistent Storage) has been pulled forward into Phase 1.6 due to critical crash recovery requirements.
 
 ### 3.1 Enhanced Commands
 **Status:** 🔲 Not Started
@@ -426,13 +341,9 @@ This roadmap tracks the implementation progress from current state (foundation c
 ---
 
 ### 3.4 Persistent Storage
-**Status:** 🔲 Not Started
+**Status:** ⏫ Moved to Phase 1.6.3
 
-**Tasks:**
-- [ ] Implement disk-backed Storage (replace MemStorage)
-- [ ] Add snapshot serialization with bincode
-- [ ] Test crash recovery scenarios
-- [ ] Add `--data-dir` flag for storage path
+> **This section has been promoted to Phase 1.6.3** due to critical crash recovery requirements. See Phase 1.6 for full implementation details.
 
 ---
 
@@ -578,4 +489,51 @@ Logs will be in `node-1.log`, `node-2.log`, `node-3.log`.
 
 ---
 
-Last Updated: 2025-11-15
+### Phase 1.6 Discovery (Crash Recovery Critical Bug)
+
+**Problem Identified:**
+- Node startup panic: `to_commit X is out of range [last_index 0]`
+- Occurs when node joins cluster late or restarts after downtime
+- Root cause: Ready loop missing snapshot handling
+
+**Why It Happens:**
+1. Leader has committed entries 1-9
+2. New node starts with empty log (last_index=0)
+3. Leader sends heartbeat with commit_index=9 before sending entries
+4. raft-rs validates commit_index <= last_index, fails (9 > 0)
+
+**The Two-Pronged Solution:**
+
+**1. Snapshot Handling (CRITICAL - Prevents Panic):**
+- Add snapshot processing in Ready loop BEFORE entry append
+- When node is too far behind, leader sends snapshot instead of entries
+- Snapshot brings node up to date instantly (e.g., covers entries 1-1000)
+- Required for: new nodes joining, nodes down for long time, log compaction
+
+**2. Persistent Storage (HIGH - Enables Crash Recovery):**
+- Persist HardState (term, vote, commit) to survive restarts
+- Persist log entries to rebuild Raft log after crash
+- Persist snapshots to disk for recovery
+- Track applied_index separately to prevent duplicate application
+- Without persistence: Every restart loses all state, must receive snapshot
+
+**Key Insight:**
+- Persistent storage alone won't fix the panic (new nodes start empty)
+- Snapshot handling alone won't survive crashes (state lost on restart)
+- BOTH are required for production-ready crash recovery
+
+**Implementation Order:**
+1. Node snapshot methods (create_snapshot, restore_from_snapshot)
+2. Snapshot handling in Ready loop (prevents panic)
+3. Disk-backed storage (enables crash recovery)
+4. Integration testing (crash scenarios)
+
+**Testing Strategy:**
+- Unit tests: Snapshot serialization roundtrip
+- Integration tests: Mock snapshot reception in Ready loop
+- End-to-end tests: Kill node → restart → verify recovery
+- Cluster tests: 3 nodes, kill follower/leader, verify cluster health
+
+---
+
+Last Updated: 2025-11-15 (Added Phase 1.6 - Crash Recovery)
