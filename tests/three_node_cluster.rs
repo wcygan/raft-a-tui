@@ -327,3 +327,114 @@ fn test_three_node_cluster_basic_setup() {
 
     println!("=== Basic setup test complete ===\n");
 }
+
+#[test]
+fn test_follower_campaign_becomes_leader() {
+    println!("\n=== Follower Campaign Test ===\n");
+
+    // 1. Setup 3-node cluster
+    println!("Setting up 3-node cluster...");
+    let (node1, node2, node3) = setup_three_node_cluster();
+
+    // Give nodes time to initialize
+    thread::sleep(Duration::from_millis(200));
+
+    // 2. Wait for initial leader election
+    println!("Waiting for initial leader election...");
+    let initial_leader_id =
+        wait_for_leader(&[&node1, &node2, &node3], Duration::from_secs(5));
+
+    assert!(
+        initial_leader_id.is_some(),
+        "Initial leader should be elected within 5 seconds"
+    );
+
+    let initial_leader_id = initial_leader_id.unwrap();
+    println!("Initial leader: node {}", initial_leader_id);
+
+    // 3. Find a follower node to campaign
+    let (follower_node, follower_id) = match initial_leader_id {
+        1 => (&node2, 2u64), // If node 1 is leader, use node 2 as follower
+        2 => (&node1, 1u64), // If node 2 is leader, use node 1 as follower
+        3 => (&node1, 1u64), // If node 3 is leader, use node 1 as follower
+        _ => panic!("Invalid leader ID: {}", initial_leader_id),
+    };
+
+    println!(
+        "\nCampaigning with follower node {}...",
+        follower_id
+    );
+
+    // 4. Call CAMPAIGN on the follower
+    follower_node.send_command(UserCommand::Campaign);
+
+    // Give time for election to complete
+    thread::sleep(Duration::from_millis(500));
+
+    // 5. Wait for leadership to change
+    println!("Waiting for new leader election...");
+    let start = std::time::Instant::now();
+    let timeout = Duration::from_secs(5);
+    let mut new_leader_id = None;
+
+    while start.elapsed() < timeout {
+        // Check if follower became leader
+        if let Some(state) = follower_node.get_raft_state() {
+            if state.leader_id == follower_id {
+                new_leader_id = Some(follower_id);
+                println!(
+                    "Node {} successfully became leader at term {}!",
+                    follower_id, state.term
+                );
+                break;
+            }
+        }
+
+        thread::sleep(Duration::from_millis(50));
+    }
+
+    assert!(
+        new_leader_id.is_some(),
+        "Follower node {} should become leader after campaigning",
+        follower_id
+    );
+
+    assert_eq!(
+        new_leader_id.unwrap(),
+        follower_id,
+        "The campaigning follower should be the new leader"
+    );
+
+    // 6. Verify all nodes agree on the new leader
+    thread::sleep(Duration::from_millis(200));
+
+    let mut all_agree = true;
+    for (i, node) in [&node1, &node2, &node3].iter().enumerate() {
+        if let Some(state) = node.get_raft_state() {
+            println!(
+                "Node {} sees leader as node {} at term {}",
+                i + 1,
+                state.leader_id,
+                state.term
+            );
+
+            if state.leader_id != follower_id {
+                all_agree = false;
+            }
+        }
+    }
+
+    assert!(
+        all_agree,
+        "All nodes should agree on the new leader (node {})",
+        follower_id
+    );
+
+    println!("\n=== Campaign test complete - follower successfully became leader! ===\n");
+
+    // Shutdown all nodes
+    println!("Shutting down nodes...");
+    node1.shutdown();
+    node2.shutdown();
+    node3.shutdown();
+}

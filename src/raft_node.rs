@@ -69,7 +69,7 @@ impl RaftNode {
             id,
             heartbeat_tick: 3,
             election_tick: 10,
-            check_quorum: true,
+            check_quorum: false,  // Disabled to allow CAMPAIGN command to work on followers
             pre_vote: true,
             ..Default::default()
         };
