@@ -1,8 +1,8 @@
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
+use crate::codec::{decode, encode};
 use crate::commands::UserCommand;
-use crate::kvproto::{KvCommand, kv_command, Put};
-use crate::codec::{encode, decode};
+use crate::kvproto::{KvCommand, Put, kv_command};
 
 /// Output from a user command.
 #[derive(Debug, PartialEq, Eq)]
@@ -12,13 +12,15 @@ pub enum NodeOutput {
 }
 
 pub struct Node {
-    kv: HashMap<String, String>,
+    kv: BTreeMap<String, String>,
 }
 
 impl Node {
     /// Create a new KV node with empty state.
     pub fn new() -> Self {
-        Self { kv: HashMap::new() }
+        Self {
+            kv: BTreeMap::new(),
+        }
     }
 
     /// Apply a *user* command (non-Raft). These are ephemeral REPL actions.
@@ -79,7 +81,7 @@ impl Node {
     }
 
     /// Helper for tests (and later debug UI)
-    pub fn get_internal_map(&self) -> &HashMap<String, String> {
+    pub fn get_internal_map(&self) -> &BTreeMap<String, String> {
         &self.kv
     }
 }

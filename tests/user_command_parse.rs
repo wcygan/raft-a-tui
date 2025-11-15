@@ -1,10 +1,13 @@
-use raft_a_tui::commands::{parse_command, UserCommand};
+use raft_a_tui::commands::{UserCommand, parse_command};
 
 #[test]
 fn test_put_parsing() {
     assert_eq!(
         parse_command("PUT foo bar"),
-        Some(UserCommand::Put { key: "foo".into(), value: "bar".into() })
+        Some(UserCommand::Put {
+            key: "foo".into(),
+            value: "bar".into()
+        })
     );
 }
 
@@ -12,7 +15,9 @@ fn test_put_parsing() {
 fn test_get_parsing() {
     assert_eq!(
         parse_command("GET alpha"),
-        Some(UserCommand::Get { key: "alpha".into() })
+        Some(UserCommand::Get {
+            key: "alpha".into()
+        })
     );
 }
 

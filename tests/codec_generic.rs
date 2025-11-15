@@ -1,5 +1,5 @@
-use raft_a_tui::codec::{encode, decode};
-use raft_a_tui::kvproto::{Put, KvCommand, kv_command};
+use raft_a_tui::codec::{decode, encode};
+use raft_a_tui::kvproto::{KvCommand, Put, kv_command};
 
 #[test]
 fn generic_encode_decode_works() {

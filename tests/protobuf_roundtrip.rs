@@ -1,5 +1,5 @@
+use raft_a_tui::codec::{decode, encode};
 use raft_a_tui::kvproto::{KvCommand, Put, kv_command};
-use raft_a_tui::codec::{encode, decode};
 
 #[test]
 fn roundtrip_put_proto() {
