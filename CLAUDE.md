@@ -10,6 +10,51 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 The project is in early development. The foundational KV store, command parsing, and protobuf infrastructure exist. Raft integration and the TUI are not yet implemented (main.rs is a stub).
 
+## Development Philosophy: Human-in-the-Loop
+
+**CRITICAL:** This is an educational project emphasizing understanding over automation.
+
+**Implementation Approach:**
+- **Follow ROADMAP.md:** All implementation must align with the roadmap phases
+- **One task at a time:** Complete and test individual tasks before moving forward
+- **Human review required:** Wait for explicit approval before proceeding to next task/phase
+- **Update ROADMAP.md:** Mark tasks complete (✅), update status, add learnings
+- **No auto-completion:** Do not implement entire features without human guidance
+- **Ask questions:** When design decisions arise, present options and wait for human choice
+- **Keep it modular:** Each component should be understandable and testable in isolation
+- **Commit frequently:** After each logical unit of work (one task or subtask)
+
+**When Working on Tasks:**
+1. **Read ROADMAP.md** to understand current phase and task
+2. **Review decision points** before implementing
+3. **Implement the specific task** (not the entire phase)
+4. **Test in isolation** with unit/integration tests
+5. **Request human review** before marking task complete
+6. **Update ROADMAP.md** with status, learnings, and any new decision points
+7. **Commit changes** with clear message referencing roadmap task
+
+**Example Workflow:**
+```
+Human: "Let's start on Phase 1.1 - Storage Layer"
+AI: *Reads ROADMAP.md Phase 1.1*
+AI: "I see we need to create RaftStorage wrapping MemStorage. Before I start,
+     should we use the default MemStorage::new() or configure it? Also, for
+     applied_index, should it be part of a snapshot or separate field?"
+Human: "Separate field for now, default MemStorage is fine"
+AI: *Implements RaftStorage with applied_index field*
+AI: *Writes tests*
+AI: "Implementation complete. Here's what I did... Ready for review."
+Human: "Looks good, mark it complete"
+AI: *Updates ROADMAP.md, commits*
+```
+
+**What NOT to Do:**
+- ❌ Implement entire phases without human involvement
+- ❌ Skip decision points without asking
+- ❌ Move to next phase before current one is reviewed
+- ❌ Make architectural decisions independently
+- ❌ Implement features not in roadmap without discussion
+
 ## Development Commands
 
 ```bash
@@ -687,12 +732,31 @@ fn test_tui_rendering() {
 }
 ```
 
-## Future Work (Not Yet Implemented)
+## Implementation Roadmap
 
-Based on code comments and README:
-- Raft integration (RawNode, elections, log replication, Ready messages)
-- TUI rendering (ratatui event loop, split panes, color-coded logs)
-- Network layer (peer communication)
-- STATUS command needs Raft term/role/leader info
-- CAMPAIGN command should trigger `RawNode::campaign()`
-- Snapshot serialization (bincode dependency present but unused)
+**See ROADMAP.md for detailed implementation plan.**
+
+The roadmap is organized into phases with specific tasks, decision points, and human review checkpoints:
+
+**Phase 1: Raft Core Integration** (Get consensus working with 3 nodes)
+- Storage layer (MemStorage wrapper with applied_index tracking)
+- Network layer (local transport using crossbeam channels)
+- Raft node wrapper (RawNode initialization and configuration)
+- Raft Ready loop (tick → ready → process → advance)
+- CLI integration and 3-node testing
+
+**Phase 2: TUI Visualization** (Interactive real-time display)
+- TUI state management (App struct with channels)
+- Multi-pane rendering (4-pane layout with color coding)
+- Event loop (50ms poll timeout for 20 FPS updates)
+- Input handling (Normal/Editing modes)
+- Integration with Raft thread
+
+**Phase 3: Polish & Advanced Features** (Production-ready)
+- Enhanced commands (STATUS, CAMPAIGN, DELETE, SNAPSHOT)
+- Better visualizations (sparklines, connectivity status)
+- Network partition testing (packet loss simulation)
+- Persistent storage (disk-backed, crash recovery)
+- Multi-machine deployment (TCP transport)
+
+**Remember:** Follow the human-in-the-loop workflow. Read ROADMAP.md before starting any task, implement one task at a time, request review, update roadmap, commit.
