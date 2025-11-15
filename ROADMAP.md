@@ -58,23 +58,33 @@ This roadmap tracks the implementation progress from current state (foundation c
 ---
 
 ### 1.2 Network Layer (Local Transport)
-**Status:** 🔲 Not Started
+**Status:** ✅ Complete
 **File:** `src/network.rs`
 
 **Tasks:**
-- [ ] Define `Transport` trait with `send(to: u64, msg: Message)` method
-- [ ] Implement `LocalTransport` using `HashMap<u64, Sender<Message>>`
-- [ ] Add peer discovery from CLI `--peers` argument
-- [ ] Message serialization/deserialization (already protobuf-compatible)
-- [ ] Write tests for message routing between 3 mock nodes
+- [x] Define `Transport` trait with `send(to: u64, msg: Message)` method
+- [x] Implement `LocalTransport` using `HashMap<u64, Sender<Message>>`
+- [x] Message routing (Raft messages are already protobuf-compatible)
+- [x] Write tests for message routing between 3 mock nodes
+- [ ] Peer discovery from CLI `--peers` argument (deferred to Phase 1.5)
 
 **Decision Points:**
-- Should we add message dropping/delays for partition testing? (Later phase)
-- Error handling strategy for send failures? (Log and continue vs. panic)
+- ✅ Use `try_send()` (non-blocking) - returns error on full channel
+- ✅ Return `Result<(), TransportError>` - let Ready loop decide how to handle
+- ✅ Store `node_id` in LocalTransport for better error messages
+- ✅ Use bounded channel (100 messages) to prevent memory issues
+- ✅ Simple constructor taking `HashMap<u64, Sender<Message>>` - Phase 1.5 will parse CLI args
 
-**Human Review Required:**
-- Review transport abstraction - is it flexible enough for future TCP?
-- Validate message routing logic with diagrams/tests
+**Implementation Notes:**
+- Created `TransportError` enum: PeerNotFound, ChannelFull, ChannelClosed
+- `LocalTransport` uses crossbeam bounded channels for in-memory messaging
+- Added helper methods: `node_id()`, `peer_count()`, `has_peer()`
+- 9 comprehensive tests covering:
+  - Basic message sending
+  - Error cases (peer not found, channel full, channel closed)
+  - 3-node full mesh routing
+  - Helper methods and error display
+- All tests pass ✅
 
 ---
 
