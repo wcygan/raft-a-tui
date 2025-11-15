@@ -55,6 +55,14 @@ AI: *Updates ROADMAP.md, commits*
 - ❌ Make architectural decisions independently
 - ❌ Implement features not in roadmap without discussion
 
+## Test-Based Development Loop
+
+A fundamental pattern to follow is that `cargo test` should fully pass after you have completed a task.
+
+This typically means that new tests were introduced during your task, and that the new tests AND existing previous tests to continue to pass. 
+
+Never consider a task complete until you leave the codebase in a healthy state.
+
 ## Development Commands
 
 ```bash
