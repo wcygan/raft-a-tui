@@ -397,8 +397,8 @@ fn draw_title_bar(frame: &mut ratatui::Frame, app: &App, area: Rect) {
 fn draw_raft_state(frame: &mut ratatui::Frame, app: &App, area: Rect) {
     let text = if let Some(ref state) = app.raft_state {
         format!(
-            "Term: {}\nRole: {:?}\nLeader ID: {}\nCommit Index: {}\nApplied Index: {}",
-            state.term, state.role, state.leader_id, state.commit_index, state.applied_index
+            "Term: {}\nRole: {:?}\nLeader ID: {}\nCluster Size: {}\nCommit Index: {}\nApplied Index: {}",
+            state.term, state.role, state.leader_id, state.cluster_size, state.commit_index, state.applied_index
         )
     } else {
         "Waiting for Raft state...".to_string()

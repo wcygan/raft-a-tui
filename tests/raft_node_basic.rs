@@ -150,6 +150,7 @@ fn test_raft_state_equality() {
         leader_id: 1,
         commit_index: 10,
         applied_index: 10,
+        cluster_size: 3,
     };
 
     let state2 = RaftState {
@@ -159,6 +160,7 @@ fn test_raft_state_equality() {
         leader_id: 1,
         commit_index: 10,
         applied_index: 10,
+        cluster_size: 3,
     };
 
     assert_eq!(state1, state2);
@@ -198,16 +200,17 @@ fn test_three_node_cluster_initialization() {
     let storage2 = RaftStorage::new();
     let storage3 = RaftStorage::new();
 
-    let node1 = RaftNode::new(1, peers.clone(), storage1, logger1);
-    let node2 = RaftNode::new(2, peers.clone(), storage2, logger2);
-    let node3 = RaftNode::new(3, peers, storage3, logger3);
-
-    assert!(node1.is_ok());
-    assert!(node2.is_ok());
-    assert!(node3.is_ok());
+    let node1 = RaftNode::new(1, peers.clone(), storage1, logger1).unwrap();
+    let node2 = RaftNode::new(2, peers.clone(), storage2, logger2).unwrap();
+    let node3 = RaftNode::new(3, peers, storage3, logger3).unwrap();
 
     // All nodes should start as followers
-    assert!(!node1.unwrap().is_leader());
-    assert!(!node2.unwrap().is_leader());
-    assert!(!node3.unwrap().is_leader());
+    assert!(!node1.is_leader());
+    assert!(!node2.is_leader());
+    assert!(!node3.is_leader());
+
+    // All nodes should report cluster size of 3
+    assert_eq!(node1.get_state().cluster_size, 3);
+    assert_eq!(node2.get_state().cluster_size, 3);
+    assert_eq!(node3.get_state().cluster_size, 3);
 }

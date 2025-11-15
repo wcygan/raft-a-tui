@@ -134,6 +134,9 @@ impl RaftNode {
     ///
     /// Returns information about the node's role, term, leader, etc.
     pub fn get_state(&self) -> RaftState {
+        // Count the number of voters in the cluster configuration
+        let cluster_size = self.raw_node.raft.prs().conf().voters().ids().iter().count();
+
         RaftState {
             node_id: self.raw_node.raft.id,
             term: self.raw_node.raft.term,
@@ -141,6 +144,7 @@ impl RaftNode {
             leader_id: self.raw_node.raft.leader_id,
             commit_index: self.raw_node.raft.raft_log.committed,
             applied_index: self.raw_node.store().applied_index(),
+            cluster_size,
         }
     }
 
@@ -182,4 +186,6 @@ pub struct RaftState {
     pub leader_id: u64,
     pub commit_index: u64,
     pub applied_index: u64,
+    /// Number of nodes in the cluster (voter count from configuration)
+    pub cluster_size: usize,
 }
