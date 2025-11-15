@@ -4,8 +4,10 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-raft = "0.7"
-protobuf = { version = "3.7.2", features = ["with-bytes"] }
+raft = { version = "0.7.0", default-features = false, features = ["prost-codec"] }
+prost = "0.14.1"
+prost-types = "0.14.1"
+prost-build = "0.14.1"
 slog = "2.8.2"
 slog-term = "2.9.2"
 slog-async = "2.8.0"
