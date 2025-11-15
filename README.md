@@ -15,7 +15,7 @@ This project lets you spin up multiple terminal windows, each running a Raft nod
 * Issue commands via a REPL:
 
   * `PUT key value` — Replicate a write through the cluster.
-  * `GET key` — Read from local state (later switchable to linearizable reads).
+  * `GET key` — Read from local state.
   * `KEYS` — Pretty-print the state machine.
   * `STATUS` — View node ID, term, role (leader/follower/candidate), leader ID.
   * `CAMPAIGN` — Force an election (great for exploring leader changes).
