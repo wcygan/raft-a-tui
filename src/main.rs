@@ -75,7 +75,7 @@ impl App {
             node_id,
             input: String::new(),
             cursor_position: 0,
-            input_mode: InputMode::Normal,
+            input_mode: InputMode::Editing,  // Start in editing mode for convenience
             raft_state: None,
             kv_store: BTreeMap::new(),
             system_messages: VecDeque::with_capacity(100),

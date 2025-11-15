@@ -124,6 +124,9 @@ pub fn raft_ready_loop<T: Transport>(
                                 match raft_node.propose_command(key.clone(), value.clone()) {
                                     Ok(rx) => {
                                         debug!(logger, "Proposed PUT command"; "key" => &key, "value" => &value);
+                                        let _ = state_tx.send(StateUpdate::SystemMessage(
+                                            format!("Proposed: PUT {} = {}", key, value)
+                                        ));
                                         // The callback will be invoked when committed
                                         // For now, we just drop the receiver (fire and forget)
                                         // In a full implementation, we'd track this for client responses
@@ -131,7 +134,10 @@ pub fn raft_ready_loop<T: Transport>(
                                     }
                                     Err(e) => {
                                         warn!(logger, "Failed to propose command"; "error" => format!("{}", e));
-                                        // Log but continue - step() errors are non-fatal
+                                        // Send error message to TUI
+                                        let _ = state_tx.send(StateUpdate::SystemMessage(
+                                            format!("Error: Failed to propose PUT ({})", e)
+                                        ));
                                     }
                                 }
                             }
@@ -151,8 +157,12 @@ pub fn raft_ready_loop<T: Transport>(
                             _ => {
                                 debug!(logger, "Read-only command, applying locally");
                                 // Apply locally (doesn't mutate Raft state)
-                                let _output = kv_node.apply_user_command(cmd);
-                                // In a full implementation, we'd send the output back to the client
+                                let output = kv_node.apply_user_command(cmd);
+
+                                // Send output back to TUI
+                                if let crate::node::NodeOutput::Text(text) = output {
+                                    let _ = state_tx.send(StateUpdate::SystemMessage(text));
+                                }
                             }
                         }
                     }
