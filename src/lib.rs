@@ -5,3 +5,4 @@ pub mod kvproto {
 pub mod codec;
 pub mod commands;
 pub mod node;
+pub mod storage;

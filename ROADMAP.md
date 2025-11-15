@@ -34,23 +34,26 @@ This roadmap tracks the implementation progress from current state (foundation c
 **Goal:** Get Raft consensus working with 3 nodes (no TUI yet - logs to stdout/tests)
 
 ### 1.1 Storage Layer
-**Status:** 🔲 Not Started
+**Status:** ✅ Complete
 **File:** `src/storage.rs`
 
 **Tasks:**
-- [ ] Create `RaftStorage` struct wrapping `MemStorage`
-- [ ] Add `applied_index` tracking (critical for restart safety)
-- [ ] Implement `Storage` trait by delegating to `MemStorage`
-- [ ] Add helper methods: `applied_index()`, `set_applied_index()`
-- [ ] Write unit tests for applied_index persistence logic
+- [x] Create `RaftStorage` struct wrapping `MemStorage`
+- [x] Add `applied_index` tracking (critical for restart safety)
+- [x] Implement `Storage` trait by delegating to `MemStorage`
+- [x] Add helper methods: `applied_index()`, `set_applied_index()`
+- [x] Write unit tests for applied_index persistence logic
 
 **Decision Points:**
-- Do we need custom HardState persistence for this phase? (Probably no - MemStorage handles it)
-- Should we add snapshot support now or later? (Later - focus on basics first)
+- ✅ Use MemStorage directly for HardState persistence
+- ✅ No custom snapshot logic yet (delegate to MemStorage)
+- ✅ Use Arc<Mutex<u64>> for applied_index (thread-safe, shareable)
 
-**Human Review Required:**
-- Review Storage trait implementation for correctness
-- Verify applied_index tracking prevents reapplication bug
+**Implementation Notes:**
+- Used Arc<Mutex<u64>> for applied_index to enable sharing across clones
+- Implemented Clone trait to share both inner MemStorage and applied_index
+- Added 7 tests covering: get/set, clone sharing, ConfState initialization, Storage trait delegation
+- All tests pass ✅
 
 ---
 
