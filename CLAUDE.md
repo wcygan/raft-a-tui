@@ -84,9 +84,97 @@ just check
 # Format code
 cargo fmt
 
-# Future: Run node (not yet implemented)
+# Run node
 cargo run -- --id 1 --peers 1=127.0.0.1:6001,2=127.0.0.1:6002,3=127.0.0.1:6003
 ```
+
+## Debugging with Log Files
+
+Each node writes comprehensive debug logs to `node-{id}.log` files (git-ignored). These logs contain all Raft state machine events and are **essential for debugging consensus issues**.
+
+**Log file locations:**
+- `node-1.log` - Node 1's Raft debug logs
+- `node-2.log` - Node 2's Raft debug logs
+- `node-3.log` - Node 3's Raft debug logs
+
+**What's logged:**
+- Raft state transitions (Follower → Candidate → Leader)
+- Election attempts and vote requests/responses
+- Message sending/receiving (from/to fields, message types)
+- Log replication (entries, commits, applies)
+- Tick events every 100ms
+- Errors and warnings
+
+**Debugging workflow:**
+
+1. **Read a specific log file:**
+   ```bash
+   # Use Read tool
+   Read file: node-1.log
+
+   # Or tail recent events
+   tail -50 node-1.log
+   ```
+
+2. **Search for patterns with Grep:**
+   ```bash
+   # Find election events
+   Grep pattern: "starting a new election|became.*candidate|became leader"
+   Output mode: content
+
+   # Find message sending issues
+   Grep pattern: "Sending from.*to.*"
+   Output mode: content
+   -n: true
+
+   # Find errors
+   Grep pattern: "ERROR|WARN.*Failed"
+   Output mode: content
+   ```
+
+3. **Common debugging scenarios:**
+
+   **Stuck in PreCandidate?**
+   - Check if messages have `from: 0` (transport not setting sender ID)
+   - Look for "broadcasting vote request" followed by no responses
+   - Verify nodes are actually receiving messages
+
+   **No leader elected?**
+   - Check for election timeout fires: `"starting a new election"`
+   - Verify vote responses: `"received MsgRequestPreVoteResponse"`
+   - Ensure quorum is possible (2/3 nodes running)
+
+   **PUT commands not applying?**
+   - Grep for "Proposed PUT command" - was it accepted?
+   - Look for "ProposalDropped" errors - not leader
+   - Check "Applied KV command" - did it commit and apply?
+
+   **Network issues?**
+   - Grep for "Failed to send message" - transport errors
+   - Check for "Connection attempt failed" - TCP connection issues
+   - Verify listen addresses match in all nodes
+
+**Example debugging session:**
+```bash
+# Node stuck in PreCandidate - why?
+$ tail -50 node-1.log
+# Shows: "Sending from 1 to 2, msg: Message { ..., from: 0, ... }"
+# Bug found: from field is 0, should be 1!
+
+# Are nodes receiving votes?
+$ rg "received.*Vote" node-1.log
+# Shows: No vote responses = messages not being received
+
+# Check network errors
+$ rg "Failed to send|Connection.*failed" node-1.log
+# Shows: All sends failing = transport issue
+```
+
+**Pro tips:**
+- Always check logs FIRST when debugging consensus issues
+- Use `rg -C 5` to see context around matches
+- Compare logs across multiple nodes to see message flow
+- Watch for timing issues: elections every ~1 second (10 ticks)
 
 ## Architecture
 
