@@ -89,25 +89,39 @@ This roadmap tracks the implementation progress from current state (foundation c
 ---
 
 ### 1.3 Raft Node Wrapper
-**Status:** 🔲 Not Started
+**Status:** ✅ Complete
 **File:** `src/raft_node.rs`
 
 **Tasks:**
-- [ ] Create `RaftNode` struct containing `RawNode`, `Storage`, callbacks
-- [ ] Implement `new(id, peers, storage)` constructor with Config setup
-- [ ] Add `propose_command(key, value) -> callback_id` method
-- [ ] Implement callback tracking: `HashMap<Vec<u8>, Sender<Response>>`
-- [ ] Add helper methods: `get_state() -> RaftState`, `is_leader() -> bool`
-- [ ] Write tests for RaftNode initialization and basic operations
+- [x] Create `RaftNode` struct containing `RawNode`, `Storage`, callbacks
+- [x] Implement `new(id, peers, storage, logger)` constructor with Config setup
+- [x] Add `propose_command(key, value)` method returning `Receiver<CommandResponse>`
+- [x] Implement callback tracking: `HashMap<Vec<u8>, Sender<CommandResponse>>`
+- [x] Add helper methods: `get_state() -> RaftState`, `is_leader() -> bool`
+- [x] Write tests for RaftNode initialization and basic operations
 
 **Decision Points:**
-- How to generate unique callback IDs? (UUID, counter, hash?)
-- Should `propose_command` block or return immediately? (Return immediately)
-- Configuration values: Use recommended defaults or allow customization? (Defaults first)
+- ✅ Use UUID (uuid v4) for callback IDs - globally unique, no collisions
+- ✅ Use CommandResponse enum (Success/Error) instead of simple Result
+- ✅ Take slog::Logger as constructor parameter for flexible logging
+- ✅ Config values: heartbeat_tick=3, election_tick=10, check_quorum=true, pre_vote=true
 
-**Human Review Required:**
-- Review RawNode initialization - are config values reasonable?
-- Verify callback mechanism design before implementing Ready loop
+**Implementation Notes:**
+- Created CommandResponse enum: Success{key, value}, Error(String)
+- RaftNode wraps RawNode with callback tracking via UUID-keyed HashMap
+- Constructor initializes MemStorage with ConfState before creating RawNode
+- propose_command() generates UUID, stores callback, proposes to Raft
+- Added RaftState struct to expose: node_id, term, role, leader_id, commit_index, applied_index
+- Helper methods: get_state(), is_leader(), logger(), raw_node(), take_callback()
+- 11 comprehensive tests in tests/raft_node_basic.rs:
+  - Initialization (single & 3-node clusters)
+  - Initial state verification
+  - Leadership checks
+  - Proposal API (handles ProposalDropped when not leader)
+  - Helper method verification
+  - Equality tests for CommandResponse and RaftState
+- All tests pass ✅
+- Added uuid dependency to Cargo.toml
 
 ---
 
