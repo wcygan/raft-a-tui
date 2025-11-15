@@ -18,9 +18,11 @@ fn test_send_message_to_peer() {
     // Send should succeed
     assert!(transport.send(2, msg.clone()).is_ok());
 
-    // Receiver should get the message
+    // Receiver should get the message with 'from' field filled in by transport
     let received = rx.recv().unwrap();
-    assert_eq!(received, msg);
+    assert_eq!(received.from, 1); // Transport fills in the sender ID
+    assert_eq!(received.to, msg.to);
+    assert_eq!(received.msg_type, msg.msg_type);
 }
 
 #[test]

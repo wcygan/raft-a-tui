@@ -91,7 +91,10 @@ impl LocalTransport {
 }
 
 impl Transport for LocalTransport {
-    fn send(&self, to: u64, msg: Message) -> Result<(), TransportError> {
+    fn send(&self, to: u64, mut msg: Message) -> Result<(), TransportError> {
+        // raft-rs generates messages with from=0, transport layer must fill in sender ID
+        msg.from = self.node_id;
+
         let sender = self
             .peers
             .get(&to)
