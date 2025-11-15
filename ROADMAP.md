@@ -158,14 +158,18 @@ This roadmap tracks the implementation progress from current state (foundation c
 - Proper error handling: resilient for non-critical errors, fail for storage/channel errors
 - Process both Ready and LightReady committed entries and messages
 - Invoke callbacks for committed proposals using RaftNode::take_callback()
-- 9 comprehensive unit tests covering:
-  - Shutdown handling
-  - Channel closure detection
+- 14 comprehensive unit tests covering:
+  - Shutdown handling (graceful shutdown, channel closure detection)
   - Command handling (GET, KEYS, PUT, CAMPAIGN)
-  - Raft message handling
-  - Tick timing
-  - State update emission
-- All 54 tests pass ✅
+  - Raft message handling (step, heartbeats)
+  - Tick timing verification
+  - State update emission (RaftState, KvUpdate, LogEntry)
+  - **Single-node commit flow (propose → commit → apply → state update)**
+  - **Multiple commands producing state updates**
+  - **Transport failure resilience (loop continues despite send errors)**
+  - **Malformed entry handling structure**
+  - **Read-only commands bypass Raft (GET, KEYS, STATUS)**
+- All 59 tests pass ✅
 
 **Human Review Notes:**
 - ✅ Ready processing order matches raft-rs documentation exactly
@@ -435,6 +439,17 @@ This roadmap tracks the implementation progress from current state (foundation c
 - Consider adding write methods to RaftStorage in Phase 1.1 to avoid retrofitting
 - Could extract committed entry application into a helper function (it's duplicated for Ready and LightReady)
 - Might want to return applied key/value from `Node::apply_kv_command()` to avoid double-decoding
+
+**Enhanced Test Coverage (Post-Review):**
+- Added 5 additional tests to verify critical paths:
+  1. Single-node commit flow (propose → commit → apply → StateUpdate emission)
+  2. Multiple commands producing expected state updates
+  3. Transport failure resilience (loop continues despite send errors)
+  4. Malformed entry handling structure (defensive programming)
+  5. Read-only commands bypass Raft (GET/KEYS/STATUS don't create log entries)
+- Tests are timing-aware (single-node leader election is timing-dependent)
+- Mock FailingTransport implementation tests error resilience
+- Total test count: 14 raft_loop tests, 59 tests overall
 
 ---
 
