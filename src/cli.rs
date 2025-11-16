@@ -19,6 +19,13 @@ pub struct Args {
     /// The list must include this node's own ID and address.
     #[arg(long)]
     pub peers: String,
+
+    /// Data directory for persistent storage.
+    ///
+    /// If not specified, defaults to "./data/node-{id}".
+    /// Use "--data-dir :memory:" for in-memory storage (no persistence).
+    #[arg(long)]
+    pub data_dir: Option<String>,
 }
 
 /// Parse peer addresses from CLI argument format.

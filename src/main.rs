@@ -235,18 +235,39 @@ fn main() -> Result<(), Box<dyn Error>> {
     eprintln!("Node {} starting on {}", args.id, my_addr);
     eprintln!("Cluster: {} nodes", peer_ids.len());
 
-    // 4. Create Raft components
-    let storage = RaftStorage::new();
+    // 4. Create Raft storage (persistent by default, or in-memory with :memory:)
+    let storage = match args.data_dir.as_deref() {
+        Some(":memory:") => {
+            eprintln!("Using in-memory storage (no persistence)");
+            slog::info!(logger, "Using in-memory storage");
+            RaftStorage::new()
+        }
+        data_dir => {
+            let path = data_dir
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| format!("./data/node-{}", args.id));
+
+            // Create directory if it doesn't exist
+            std::fs::create_dir_all(&path)?;
+
+            eprintln!("Using persistent storage: {}", path);
+            slog::info!(logger, "Using persistent storage"; "path" => &path);
+
+            RaftStorage::new_with_disk(&path)?
+        }
+    };
+
+    // 5. Create Raft node
     let raft_node = RaftNode::new(args.id, peer_ids, storage, logger.clone())?;
     let kv_node = Node::new();
 
-    // 5. Create channels
+    // 6. Create channels
     let (cmd_tx, cmd_rx) = unbounded();
     let (msg_tx, msg_rx) = unbounded();
     let (state_tx, state_rx) = unbounded();
     let (shutdown_tx, shutdown_rx) = unbounded();
 
-    // 6. Create TCP transport
+    // 7. Create TCP transport
     let transport = TcpTransport::new(args.id, my_addr, peers_map, msg_tx, logger.clone())?;
 
     slog::info!(logger, "Created TCP transport"; "listen_addr" => format!("{}", my_addr));
@@ -254,7 +275,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     eprintln!("Transport listening on {}", my_addr);
     eprintln!();
 
-    // 7. Spawn Raft ready loop thread
+    // 8. Spawn Raft ready loop thread
     let raft_logger = logger.clone();
     let raft_handle = thread::Builder::new()
         .name(format!("raft-ready-loop-{}", args.id))
@@ -278,11 +299,11 @@ fn main() -> Result<(), Box<dyn Error>> {
             result
         })?;
 
-    // 8. Create and run TUI
+    // 9. Create and run TUI
     let mut app = App::new(args.id, state_rx, cmd_tx, shutdown_tx);
     let loop_result = run_tui(&mut app);
 
-    // 9. Wait for Raft thread to exit
+    // 10. Wait for Raft thread to exit
     slog::info!(logger, "Waiting for Raft thread to exit");
     let raft_result = raft_handle.join().expect("Raft thread panicked");
 

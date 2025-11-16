@@ -62,7 +62,7 @@ impl RaftNode {
     pub fn new(
         id: u64,
         peers: Vec<u64>,
-        storage: RaftStorage,
+        mut storage: RaftStorage,
         logger: Logger,
     ) -> Result<Self, raft::Error> {
         let config = Config {
@@ -84,7 +84,8 @@ impl RaftNode {
 
         // Initialize storage with conf_state
         // MemStorage needs to be initialized before creating RawNode
-        storage.inner().initialize_with_conf_state(conf_state);
+        // DiskStorage may already have persisted conf_state, so this is conditional
+        storage.initialize_with_conf_state(conf_state);
 
         let raw_node = RawNode::new(&config, storage, &logger)?;
 
