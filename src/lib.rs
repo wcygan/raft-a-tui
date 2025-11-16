@@ -5,6 +5,7 @@ pub mod kvproto {
 pub mod cli;
 pub mod codec;
 pub mod commands;
+pub mod disk_storage;
 pub mod network;
 pub mod node;
 pub mod raft_loop;

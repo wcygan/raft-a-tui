@@ -20,6 +20,10 @@ bincode = "2.0.1"
 crossbeam-channel = "0.5.15"
 clap = { version = "4.5.51", features = ["derive"] }
 uuid = { version = "1.11.0", features = ["v4"] }
+sled = "0.34"
+
+[dev-dependencies]
+tempfile = "3.13"
 
 [build-dependencies]
 prost-build = "0.14.1"

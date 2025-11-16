@@ -244,8 +244,13 @@ pub fn raft_ready_loop<T: Transport>(
 
         // 1. Apply snapshot if present
         if !ready.snapshot().is_empty() {
-            info!(logger, "Applying snapshot"; "snapshot_metadata" => format!("{:?}", ready.snapshot().get_metadata()));
             let snapshot = ready.snapshot();
+            let snapshot_index = snapshot.get_metadata().index;
+            let snapshot_term = snapshot.get_metadata().term;
+
+            info!(logger, "Applying snapshot";
+                  "index" => snapshot_index,
+                  "term" => snapshot_term);
 
             // Apply snapshot to storage
             if let Err(e) = raft_node.raw_node_mut().mut_store().apply_snapshot(snapshot.clone()) {
@@ -253,8 +258,31 @@ pub fn raft_ready_loop<T: Transport>(
                 return Err(RaftLoopError::StorageError(e));
             }
 
-            // TODO: Apply snapshot to KV store (when we implement snapshots)
-            // For now, snapshots are empty
+            // Restore KV state machine from snapshot data
+            let snapshot_data = snapshot.get_data();
+            if let Err(e) = kv_node.restore_from_snapshot(snapshot_data) {
+                error!(logger, "Failed to restore KV state from snapshot";
+                       "error" => format!("{}", e),
+                       "snapshot_index" => snapshot_index);
+                return Err(RaftLoopError::Other(format!(
+                    "Snapshot restore failed at index {}: {}",
+                    snapshot_index, e
+                )));
+            }
+
+            // Update applied index to snapshot index
+            raft_node.raw_node_mut().mut_store().set_applied_index(snapshot_index);
+
+            info!(logger, "Snapshot applied successfully";
+                  "index" => snapshot_index,
+                  "term" => snapshot_term,
+                  "kv_entries" => kv_node.get_internal_map().len());
+
+            // Notify TUI
+            let _ = state_tx.send(StateUpdate::SystemMessage(format!(
+                "📸 Applied snapshot at index {} (term {})",
+                snapshot_index, snapshot_term
+            )));
         }
 
         // 2. Append new log entries to storage

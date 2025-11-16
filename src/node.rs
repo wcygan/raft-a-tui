@@ -84,4 +84,48 @@ impl Node {
     pub fn get_internal_map(&self) -> &BTreeMap<String, String> {
         &self.kv
     }
+
+    /// Create a snapshot of the current KV state.
+    ///
+    /// Returns bincode-encoded BTreeMap<String, String>.
+    /// This snapshot can be used to restore state after a crash or to
+    /// bring a new node up to date with the cluster.
+    ///
+    /// # Returns
+    /// - `Ok(Vec<u8>)` - Serialized snapshot data
+    /// - `Err(...)` - Serialization error (should never happen for BTreeMap)
+    pub fn create_snapshot(&self) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+        bincode::encode_to_vec(&self.kv, bincode::config::standard())
+            .map_err(|e| e.into())
+    }
+
+    /// Restore KV state from a snapshot.
+    ///
+    /// Replaces ALL current state with the snapshot data. This is the correct
+    /// Raft semantics - a snapshot is an authoritative point-in-time state.
+    ///
+    /// # Arguments
+    /// * `data` - Bincode-encoded BTreeMap<String, String> from create_snapshot()
+    ///
+    /// # Returns
+    /// - `Ok(())` - State successfully restored
+    /// - `Err(...)` - Deserialization error (malformed snapshot data)
+    ///
+    /// # Behavior
+    /// - Empty snapshot (0 bytes) → clears all state (empty KV store)
+    /// - Non-empty snapshot → replaces all state with snapshot contents
+    pub fn restore_from_snapshot(&mut self, data: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
+        if data.is_empty() {
+            // Empty snapshot = empty state
+            self.kv.clear();
+            return Ok(());
+        }
+
+        let (restored, _bytes_read): (BTreeMap<String, String>, usize) =
+            bincode::decode_from_slice(data, bincode::config::standard())?;
+
+        // Replace entire state (correct Raft semantics)
+        self.kv = restored;
+        Ok(())
+    }
 }
