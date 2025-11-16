@@ -107,11 +107,21 @@ impl RaftNode {
     /// # Returns
     /// A receiver that will get the CommandResponse when committed,
     /// or an error if the proposal fails.
+    ///
+    /// # Errors
+    /// Returns `Error::ProposalDropped` if this node is not the leader.
+    /// Clients should redirect to the current leader (available via `get_state().leader_id`).
     pub fn propose_command(
         &mut self,
         key: String,
         value: String,
     ) -> Result<crossbeam_channel::Receiver<CommandResponse>, raft::Error> {
+        // CRITICAL: Only leaders can accept write proposals
+        // This is a fundamental Raft safety requirement
+        if !self.is_leader() {
+            return Err(raft::Error::ProposalDropped);
+        }
+
         // Generate unique callback ID
         let callback_id = Uuid::new_v4().as_bytes().to_vec();
 

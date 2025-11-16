@@ -133,6 +133,24 @@ pub fn raft_ready_loop<T: Transport>(
                                         // In a full implementation, we'd track this for client responses
                                         drop(rx);
                                     }
+                                    Err(raft::Error::ProposalDropped) => {
+                                        // Not the leader - provide helpful redirect message
+                                        let state = raft_node.get_state();
+                                        let leader_hint = if state.leader_id == 0 {
+                                            "no leader elected yet".to_string()
+                                        } else {
+                                            format!("leader is node {}", state.leader_id)
+                                        };
+
+                                        warn!(logger, "Rejected PUT - not leader";
+                                              "key" => &key,
+                                              "role" => format!("{:?}", state.role),
+                                              "leader_id" => state.leader_id);
+
+                                        let _ = state_tx.send(StateUpdate::SystemMessage(
+                                            format!("ERROR: Not leader ({}) - writes must go to leader", leader_hint)
+                                        ));
+                                    }
                                     Err(e) => {
                                         warn!(logger, "Failed to propose command"; "error" => format!("{}", e));
                                         // Send error message to TUI
