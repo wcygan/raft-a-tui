@@ -7,7 +7,7 @@ An interactive playground for learning about the Raft consensus algorithm, power
 
 This project lets you spin up multiple terminal windows, each running a Raft node with its own TUI. You can submit commands (like `PUT`, `GET`, `STATUS`, `KEYS`, `CAMPAIGN`), watch elections happen in real time, and see how log entries replicate across the cluster. It's a hands-on way to understand how Raft behaves under normal conditions and during leadership changes.
 
-![raft-a-tui](https://github.com/user-attachments/assets/b8c5cccc-f7bf-4757-a07f-16a0bc6fc69c)
+![raft-a-tui](resources/example-1.png)
 
 ---
 
