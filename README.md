@@ -5,7 +5,9 @@ An interactive playground for learning about the Raft consensus algorithm, power
 1. **[raft-rs](https://github.com/tikv/raft-rs)** for the consensus core and
 2. **[ratatui](https://ratatui.rs/)** for a terminal UI.
 
-This project lets you spin up multiple terminal windows, each running a Raft node with its own TUI. You can submit commands (like `PUT`, `GET`, `STATUS`, `KEYS`, `CAMPAIGN`), watch elections happen in real time, and see how log entries replicate across the cluster. It’s a hands-on way to understand how Raft behaves under normal conditions and during leadership changes.
+This project lets you spin up multiple terminal windows, each running a Raft node with its own TUI. You can submit commands (like `PUT`, `GET`, `STATUS`, `KEYS`, `CAMPAIGN`), watch elections happen in real time, and see how log entries replicate across the cluster. It's a hands-on way to understand how Raft behaves under normal conditions and during leadership changes.
+
+![raft-a-tui](https://github.com/user-attachments/assets/b8c5cccc-f7bf-4757-a07f-16a0bc6fc69c)
 
 ---
 
@@ -41,7 +43,7 @@ cargo run -- --id 2 --peers 1=127.0.0.1:6001,2=127.0.0.1:6002,3=127.0.0.1:6003
 cargo run -- --id 3 --peers 1=127.0.0.1:6001,2=127.0.0.1:6002,3=127.0.0.1:6003
 ```
 
-You’ll now have three interactive terminal UIs representing a Raft cluster.
+You'll now have three interactive terminal UIs representing a Raft cluster.
 
 Try things like:
 
@@ -58,7 +60,7 @@ KEYS
 ## References & Further Reading
 
 1. **Raft Algorithm** — [https://raft.github.io/](https://raft.github.io/)
-2. **raft-rs** (TiKV’s Rust implementation) — [https://github.com/tikv/raft-rs](https://github.com/tikv/raft-rs)
+2. **raft-rs** (TiKV's Rust implementation) — [https://github.com/tikv/raft-rs](https://github.com/tikv/raft-rs)
 3. **Implement Raft in Rust** — [https://tikv.org/blog/implement-raft-in-rust/](https://tikv.org/blog/implement-raft-in-rust/)
 4. **TiKV Deep Dive** — [https://tikv.org/deep-dive/introduction/](https://tikv.org/deep-dive/introduction/)
 5. **ratatui** — [https://ratatui.rs/](https://ratatui.rs/)
