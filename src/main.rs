@@ -19,7 +19,7 @@ use slog::{o, Drain, Logger};
 use raft_a_tui::cli::{parse_peers, Args};
 use raft_a_tui::commands::{parse_command, UserCommand};
 use raft_a_tui::node::Node;
-use raft_a_tui::raft_loop::{raft_ready_loop, StateUpdate};
+use raft_a_tui::raft_loop::{RaftDriver, StateUpdate};
 use raft_a_tui::raft_node::{RaftNode, RaftState};
 use raft_a_tui::storage::RaftStorage;
 use raft_a_tui::tcp_transport::TcpTransport;
@@ -281,7 +281,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         .name(format!("raft-ready-loop-{}", args.id))
         .spawn(move || {
             slog::info!(raft_logger, "Raft ready loop starting");
-            let result = raft_ready_loop(
+            let driver = RaftDriver::new(
                 raft_node,
                 kv_node,
                 cmd_rx,
@@ -290,6 +290,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 transport,
                 shutdown_rx,
             );
+            let result = driver.run();
 
             match &result {
                 Ok(_) => slog::info!(raft_logger, "Raft ready loop exited cleanly"),

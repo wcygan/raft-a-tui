@@ -74,15 +74,22 @@ impl DiskStorage {
     }
 
     /// Set the applied index and persist it to disk.
-    pub fn set_applied_index(&self, index: u64) {
+    pub fn set_applied_index(&self, index: u64) -> RaftResult<()> {
         *self.applied_index.lock().unwrap() = index;
 
         // Persist to disk
-        let bytes = bincode::encode_to_vec(&index, bincode::config::standard()).unwrap();
+        let bytes = bincode::encode_to_vec(&index, bincode::config::standard())
+            .map_err(|e| raft::Error::Store(raft::StorageError::Other(Box::new(e))))?;
+        
         self.meta_tree
             .insert("applied_index", bytes.as_slice())
-            .unwrap();
-        self.meta_tree.flush().unwrap(); // Ensure durability
+            .map_err(|e| raft::Error::Store(raft::StorageError::Other(Box::new(e))))?;
+            
+        self.meta_tree
+            .flush()
+            .map_err(|e| raft::Error::Store(raft::StorageError::Other(Box::new(e))))?;
+            
+        Ok(())
     }
 
     /// Append entries to the log.
@@ -91,7 +98,8 @@ impl DiskStorage {
     pub fn append(&mut self, entries: &[Entry]) -> RaftResult<()> {
         for entry in entries {
             let key = index_to_key(entry.index);
-            let value = encode_proto(entry);
+            let value = encode_proto(entry)
+                .map_err(|e| raft::Error::Store(raft::StorageError::Other(Box::new(e))))?;
 
             self.entries_tree
                 .insert(key, value.as_slice())
@@ -112,7 +120,8 @@ impl DiskStorage {
     pub fn apply_snapshot(&mut self, snapshot: Snapshot) -> RaftResult<()> {
         // Store snapshot data
         let snapshot_index = snapshot.get_metadata().index;
-        let snapshot_bytes = encode_proto(&snapshot);
+        let snapshot_bytes = encode_proto(&snapshot)
+            .map_err(|e| raft::Error::Store(raft::StorageError::Other(Box::new(e))))?;
 
         self.snapshots_tree
             .insert("latest", snapshot_bytes.as_slice())
@@ -120,7 +129,8 @@ impl DiskStorage {
 
         // Store ConfState from snapshot metadata
         let conf_state = snapshot.get_metadata().get_conf_state();
-        let conf_bytes = encode_proto(conf_state);
+        let conf_bytes = encode_proto(conf_state)
+            .map_err(|e| raft::Error::Store(raft::StorageError::Other(Box::new(e))))?;
 
         self.meta_tree
             .insert("confstate", conf_bytes.as_slice())
@@ -162,10 +172,19 @@ impl DiskStorage {
     /// Set the HardState (term, vote, commit).
     ///
     /// This persists the HardState to disk immediately.
-    pub fn set_hardstate(&mut self, hs: HardState) {
-        let bytes = encode_proto(&hs);
-        self.meta_tree.insert("hardstate", bytes.as_slice()).unwrap();
-        self.meta_tree.flush().unwrap(); // Ensure durability
+    pub fn set_hardstate(&mut self, hs: HardState) -> RaftResult<()> {
+        let bytes = encode_proto(&hs)
+            .map_err(|e| raft::Error::Store(raft::StorageError::Other(Box::new(e))))?;
+            
+        self.meta_tree
+            .insert("hardstate", bytes.as_slice())
+            .map_err(|e| raft::Error::Store(raft::StorageError::Other(Box::new(e))))?;
+            
+        self.meta_tree
+            .flush()
+            .map_err(|e| raft::Error::Store(raft::StorageError::Other(Box::new(e))))?;
+            
+        Ok(())
     }
 
     /// Compact the log up to the given index (inclusive).
@@ -386,10 +405,10 @@ fn key_to_index(key: &[u8]) -> u64 {
 }
 
 /// Encode a protobuf message to bytes.
-fn encode_proto<M: ProstMessage011>(msg: &M) -> Vec<u8> {
+fn encode_proto<M: ProstMessage011>(msg: &M) -> Result<Vec<u8>, prost_011::EncodeError> {
     let mut buf = Vec::with_capacity(msg.encoded_len());
-    msg.encode(&mut buf).unwrap();
-    buf
+    msg.encode(&mut buf)?;
+    Ok(buf)
 }
 
 /// Decode a protobuf message from bytes.

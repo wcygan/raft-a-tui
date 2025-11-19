@@ -11,6 +11,9 @@ use slog::{debug, error, info, warn, Logger};
 
 use crate::network::{Transport, TransportError};
 
+const MAX_RETRIES: usize = 3;
+const RETRY_DELAY: Duration = Duration::from_millis(10);
+
 /// TCP-based transport for sending Raft messages between nodes.
 ///
 /// This transport uses TCP connections to send protobuf-encoded Raft messages.
@@ -260,9 +263,6 @@ fn send_message_with_retry(
     msg: &Message,
     logger: &Logger,
 ) -> io::Result<()> {
-    const MAX_RETRIES: usize = 3;
-    const RETRY_DELAY: Duration = Duration::from_millis(10);
-
     let mut last_error = None;
 
     for attempt in 0..MAX_RETRIES {

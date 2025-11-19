@@ -7,10 +7,33 @@ use raft::prelude::*;
 use raft_a_tui::commands::UserCommand;
 use raft_a_tui::network::LocalTransport;
 use raft_a_tui::node::Node;
-use raft_a_tui::raft_loop::{raft_ready_loop, StateUpdate};
+use raft_a_tui::raft_loop::{RaftDriver, RaftLoopError, StateUpdate};
 use raft_a_tui::raft_node::RaftNode;
 use raft_a_tui::storage::RaftStorage;
+use raft_a_tui::network::Transport;
 use slog::o;
+
+/// Helper wrapper to adapt tests to RaftDriver
+fn raft_ready_loop<T: Transport>(
+    raft_node: RaftNode,
+    kv_node: Node,
+    cmd_rx: Receiver<UserCommand>,
+    msg_rx: Receiver<Message>,
+    state_tx: Sender<StateUpdate>,
+    transport: T,
+    shutdown_rx: Receiver<()>,
+) -> Result<(), RaftLoopError> {
+    let driver = RaftDriver::new(
+        raft_node,
+        kv_node,
+        cmd_rx,
+        msg_rx,
+        state_tx,
+        transport,
+        shutdown_rx,
+    );
+    driver.run()
+}
 
 /// Helper to create a test logger that discards output
 fn test_logger() -> slog::Logger {

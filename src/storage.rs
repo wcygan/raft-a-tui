@@ -89,10 +89,11 @@ impl RaftStorage {
     }
 
     /// Set the applied index to the given value.
-    pub fn set_applied_index(&self, index: u64) {
+    pub fn set_applied_index(&self, index: u64) -> RaftResult<()> {
         match self {
             Self::Memory { applied_index, .. } => {
                 *applied_index.lock().unwrap() = index;
+                Ok(())
             }
             Self::Disk(disk) => disk.set_applied_index(index),
         }
@@ -115,9 +116,12 @@ impl RaftStorage {
     }
 
     /// Set the HardState (term, vote, commit).
-    pub fn set_hardstate(&mut self, hs: HardState) {
+    pub fn set_hardstate(&mut self, hs: HardState) -> RaftResult<()> {
         match self {
-            Self::Memory { inner, .. } => inner.wl().set_hardstate(hs),
+            Self::Memory { inner, .. } => {
+                inner.wl().set_hardstate(hs);
+                Ok(())
+            }
             Self::Disk(disk) => disk.set_hardstate(hs),
         }
     }

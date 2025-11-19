@@ -90,472 +90,364 @@ impl From<raft::Error> for RaftLoopError {
 /// - Transport errors: Logged and continued (network may be flaky)
 /// - Channel closed: Returns error (fatal)
 /// - Storage errors: Returns error (fatal)
-pub fn raft_ready_loop<T: Transport>(
-    mut raft_node: RaftNode,
-    mut kv_node: Node,
+const TICK_INTERVAL: Duration = Duration::from_millis(100);
+
+/// The driver for the Raft consensus algorithm.
+///
+/// Encapsulates the state and logic for driving the Raft node, including:
+/// - Handling input (commands, messages, ticks)
+/// - Processing Ready states
+/// - Applying entries to the state machine
+/// - Managing the transport and storage
+pub struct RaftDriver<T: Transport> {
+    raft_node: RaftNode,
+    kv_node: Node,
     cmd_rx: Receiver<UserCommand>,
     msg_rx: Receiver<Message>,
     state_tx: Sender<StateUpdate>,
     transport: T,
     shutdown_rx: Receiver<()>,
-) -> Result<(), RaftLoopError> {
-    let logger = raft_node.logger().clone();
-    info!(logger, "Raft ready loop starting"; "node_id" => raft_node.get_state().node_id);
+    logger: slog::Logger,
+    previous_leader_id: Option<u64>,
+}
 
-    let tick_duration = Duration::from_millis(100);
-    let mut tick_timer = Instant::now();
-    let mut previous_leader_id: Option<u64> = None;
+impl<T: Transport> RaftDriver<T> {
+    pub fn new(
+        raft_node: RaftNode,
+        kv_node: Node,
+        cmd_rx: Receiver<UserCommand>,
+        msg_rx: Receiver<Message>,
+        state_tx: Sender<StateUpdate>,
+        transport: T,
+        shutdown_rx: Receiver<()>,
+    ) -> Self {
+        let logger = raft_node.logger().clone();
+        Self {
+            raft_node,
+            kv_node,
+            cmd_rx,
+            msg_rx,
+            state_tx,
+            transport,
+            shutdown_rx,
+            logger,
+            previous_leader_id: None,
+        }
+    }
 
-    loop {
-        // Calculate timeout until next tick
-        let timeout = tick_duration.saturating_sub(tick_timer.elapsed());
+    pub fn run(mut self) -> Result<(), RaftLoopError> {
+        info!(self.logger, "Raft ready loop starting"; "node_id" => self.raft_node.get_state().node_id);
 
-        // Phase 1: Input Reception
-        // Wait for input with timeout using crossbeam select!
-        select! {
-            recv(cmd_rx) -> result => {
-                match result {
-                    Ok(cmd) => {
-                        debug!(logger, "Received user command"; "command" => format!("{:?}", cmd));
+        let mut tick_timer = Instant::now();
 
-                        // Handle different command types
-                        match cmd {
-                            UserCommand::Put { key, value } => {
-                                // Propose command to Raft
-                                match raft_node.propose_command(key.clone(), value.clone()) {
-                                    Ok(rx) => {
-                                        debug!(logger, "Proposed PUT command"; "key" => &key, "value" => &value);
-                                        let _ = state_tx.send(StateUpdate::SystemMessage(
-                                            format!("Proposed: PUT {} = {}", key, value)
-                                        ));
-                                        // The callback will be invoked when committed
-                                        // For now, we just drop the receiver (fire and forget)
-                                        // In a full implementation, we'd track this for client responses
-                                        drop(rx);
-                                    }
-                                    Err(raft::Error::ProposalDropped) => {
-                                        // Not the leader - provide helpful redirect message
-                                        let state = raft_node.get_state();
-                                        let leader_hint = if state.leader_id == 0 {
-                                            "no leader elected yet".to_string()
-                                        } else {
-                                            format!("leader is node {}", state.leader_id)
-                                        };
+        loop {
+            // Calculate timeout until next tick
+            let timeout = TICK_INTERVAL.saturating_sub(tick_timer.elapsed());
 
-                                        warn!(logger, "Rejected PUT - not leader";
-                                              "key" => &key,
-                                              "role" => format!("{:?}", state.role),
-                                              "leader_id" => state.leader_id);
-
-                                        let _ = state_tx.send(StateUpdate::SystemMessage(
-                                            format!("ERROR: Not leader ({}) - writes must go to leader", leader_hint)
-                                        ));
-                                    }
-                                    Err(e) => {
-                                        warn!(logger, "Failed to propose command"; "error" => format!("{}", e));
-                                        // Send error message to TUI
-                                        let _ = state_tx.send(StateUpdate::SystemMessage(
-                                            format!("Error: Failed to propose PUT ({})", e)
-                                        ));
-                                    }
-                                }
-                            }
-                            UserCommand::Campaign => {
-                                // Trigger election by calling campaign()
-                                if let Err(e) = raft_node.raw_node_mut().campaign() {
-                                    warn!(logger, "Failed to campaign"; "error" => format!("{}", e));
-                                } else {
-                                    info!(logger, "Starting election campaign");
-                                    let _ = state_tx.send(StateUpdate::SystemMessage(
-                                        "Starting election campaign".to_string()
-                                    ));
-                                }
-                            }
-                            // STATUS displays current Raft state
-                            UserCommand::Status => {
-                                let state = raft_node.get_state();
-                                let status_msg = format!(
-                                    "STATUS:\n  Node ID: {}\n  Term: {}\n  Role: {:?}\n  Leader ID: {}\n  Cluster Size: {} nodes\n  Commit Index: {}\n  Applied Index: {}",
-                                    state.node_id,
-                                    state.term,
-                                    state.role,
-                                    state.leader_id,
-                                    state.cluster_size,
-                                    state.commit_index,
-                                    state.applied_index
-                                );
-                                let _ = state_tx.send(StateUpdate::SystemMessage(status_msg));
-                            }
-                            // Other commands (GET, KEYS) are read-only
-                            // They don't go through Raft - just read local state
-                            UserCommand::Get { .. } | UserCommand::Keys => {
-                                debug!(logger, "Read-only command, applying locally");
-                                // Apply locally (doesn't mutate Raft state)
-                                let output = kv_node.apply_user_command(cmd);
-
-                                // Send output back to TUI
-                                if let crate::node::NodeOutput::Text(text) = output {
-                                    let _ = state_tx.send(StateUpdate::SystemMessage(text));
-                                }
-                            }
+            // Phase 1: Input Reception
+            select! {
+                recv(self.cmd_rx) -> result => {
+                    match result {
+                        Ok(cmd) => self.handle_user_command(cmd)?,
+                        Err(_) => {
+                            info!(self.logger, "Command channel closed, shutting down");
+                            return Err(RaftLoopError::ChannelClosed("cmd_rx".to_string()));
                         }
                     }
-                    Err(_) => {
-                        // cmd_rx closed - shutdown
-                        info!(logger, "Command channel closed, shutting down");
-                        return Err(RaftLoopError::ChannelClosed("cmd_rx".to_string()));
-                    }
-                }
-            },
-            recv(msg_rx) -> result => {
-                match result {
-                    Ok(msg) => {
-                        debug!(logger, "Received Raft message";
-                               "from" => msg.from,
-                               "to" => msg.to,
-                               "msg_type" => format!("{:?}", msg.msg_type()));
-
-                        // Step the Raft state machine with the message
-                        if let Err(e) = raft_node.raw_node_mut().step(msg) {
-                            warn!(logger, "Failed to step Raft message"; "error" => format!("{}", e));
-                            // Log but continue - step() errors are non-fatal per ROADMAP
+                },
+                recv(self.msg_rx) -> result => {
+                    match result {
+                        Ok(msg) => self.handle_raft_message(msg)?,
+                        Err(_) => {
+                            info!(self.logger, "Message channel closed, shutting down");
+                            return Err(RaftLoopError::ChannelClosed("msg_rx".to_string()));
                         }
                     }
-                    Err(_) => {
-                        // msg_rx closed - shutdown
-                        info!(logger, "Message channel closed, shutting down");
-                        return Err(RaftLoopError::ChannelClosed("msg_rx".to_string()));
+                },
+                recv(self.shutdown_rx) -> _ => {
+                    info!(self.logger, "Shutdown signal received, exiting ready loop");
+                    return Ok(());
+                },
+                default(timeout) => {},
+            }
+
+            // Tick the Raft state machine if enough time has elapsed
+            if tick_timer.elapsed() >= TICK_INTERVAL {
+                debug!(self.logger, "Ticking Raft state machine");
+                self.raft_node.raw_node_mut().tick();
+                tick_timer = Instant::now();
+            }
+
+            // Phase 2: Ready Check
+            if !self.raft_node.raw_node().has_ready() {
+                continue;
+            }
+
+            // Phase 3: Ready Processing
+            self.process_ready()?;
+        }
+    }
+
+    fn handle_user_command(&mut self, cmd: UserCommand) -> Result<(), RaftLoopError> {
+        debug!(self.logger, "Received user command"; "command" => format!("{:?}", cmd));
+
+        match cmd {
+            UserCommand::Put { key, value } => {
+                match self.raft_node.propose_command(key.clone(), value.clone()) {
+                    Ok(rx) => {
+                        debug!(self.logger, "Proposed PUT command"; "key" => &key, "value" => &value);
+                        let _ = self.state_tx.send(StateUpdate::SystemMessage(
+                            format!("Proposed: PUT {} = {}", key, value)
+                        ));
+                        drop(rx); // Fire and forget for now
+                    }
+                    Err(raft::Error::ProposalDropped) => {
+                        let state = self.raft_node.get_state();
+                        let leader_hint = if state.leader_id == 0 {
+                            "no leader elected yet".to_string()
+                        } else {
+                            format!("leader is node {}", state.leader_id)
+                        };
+
+                        warn!(self.logger, "Rejected PUT - not leader";
+                              "key" => &key,
+                              "role" => format!("{:?}", state.role),
+                              "leader_id" => state.leader_id);
+
+                        let _ = self.state_tx.send(StateUpdate::SystemMessage(
+                            format!("ERROR: Not leader ({}) - writes must go to leader", leader_hint)
+                        ));
+                    }
+                    Err(e) => {
+                        warn!(self.logger, "Failed to propose command"; "error" => format!("{}", e));
+                        let _ = self.state_tx.send(StateUpdate::SystemMessage(
+                            format!("Error: Failed to propose PUT ({})", e)
+                        ));
                     }
                 }
-            },
-            recv(shutdown_rx) -> _ => {
-                // Graceful shutdown requested
-                info!(logger, "Shutdown signal received, exiting ready loop");
-                return Ok(());
-            },
-            default(timeout) => {
-                // Timeout - no input received, continue to tick check
-            },
+            }
+            UserCommand::Campaign => {
+                if let Err(e) = self.raft_node.raw_node_mut().campaign() {
+                    warn!(self.logger, "Failed to campaign"; "error" => format!("{}", e));
+                } else {
+                    info!(self.logger, "Starting election campaign");
+                    let _ = self.state_tx.send(StateUpdate::SystemMessage(
+                        "Starting election campaign".to_string()
+                    ));
+                }
+            }
+            UserCommand::Status => {
+                let state = self.raft_node.get_state();
+                let status_msg = format!(
+                    "STATUS:\n  Node ID: {}\n  Term: {}\n  Role: {:?}\n  Leader ID: {}\n  Cluster Size: {} nodes\n  Commit Index: {}\n  Applied Index: {}",
+                    state.node_id,
+                    state.term,
+                    state.role,
+                    state.leader_id,
+                    state.cluster_size,
+                    state.commit_index,
+                    state.applied_index
+                );
+                let _ = self.state_tx.send(StateUpdate::SystemMessage(status_msg));
+            }
+            UserCommand::Get { .. } | UserCommand::Keys => {
+                debug!(self.logger, "Read-only command, applying locally");
+                let output = self.kv_node.apply_user_command(cmd);
+                if let crate::node::NodeOutput::Text(text) = output {
+                    let _ = self.state_tx.send(StateUpdate::SystemMessage(text));
+                }
+            }
         }
+        Ok(())
+    }
 
-        // Tick the Raft state machine if enough time has elapsed
-        if tick_timer.elapsed() >= tick_duration {
-            debug!(logger, "Ticking Raft state machine");
-            raft_node.raw_node_mut().tick();
-            tick_timer = Instant::now();
+    fn handle_raft_message(&mut self, msg: Message) -> Result<(), RaftLoopError> {
+        debug!(self.logger, "Received Raft message";
+               "from" => msg.from,
+               "to" => msg.to,
+               "msg_type" => format!("{:?}", msg.msg_type()));
+
+        if let Err(e) = self.raft_node.raw_node_mut().step(msg) {
+            warn!(self.logger, "Failed to step Raft message"; "error" => format!("{}", e));
         }
+        Ok(())
+    }
 
-        // Phase 2: Ready Check
-        if !raft_node.raw_node().has_ready() {
-            continue;
-        }
+    fn process_ready(&mut self) -> Result<(), RaftLoopError> {
+        let mut ready = self.raft_node.raw_node_mut().ready();
 
-        // Phase 3: Ready Processing
-        let mut ready = raft_node.raw_node_mut().ready();
-
-        debug!(logger, "Processing Ready state";
+        debug!(self.logger, "Processing Ready state";
                "has_snapshot" => !ready.snapshot().is_empty(),
                "num_entries" => ready.entries().len(),
                "num_messages" => ready.messages().len(),
                "num_persisted_messages" => ready.persisted_messages().len(),
                "num_committed" => ready.committed_entries().len());
 
-        // 1. Apply snapshot if present
         if !ready.snapshot().is_empty() {
-            let snapshot = ready.snapshot();
-            let snapshot_index = snapshot.get_metadata().index;
-            let snapshot_term = snapshot.get_metadata().term;
-
-            info!(logger, "Applying snapshot";
-                  "index" => snapshot_index,
-                  "term" => snapshot_term);
-
-            // Apply snapshot to storage
-            if let Err(e) = raft_node.raw_node_mut().mut_store().apply_snapshot(snapshot.clone()) {
-                error!(logger, "Failed to apply snapshot"; "error" => format!("{}", e));
-                return Err(RaftLoopError::StorageError(e));
-            }
-
-            // Restore KV state machine from snapshot data
-            let snapshot_data = snapshot.get_data();
-            if let Err(e) = kv_node.restore_from_snapshot(snapshot_data) {
-                error!(logger, "Failed to restore KV state from snapshot";
-                       "error" => format!("{}", e),
-                       "snapshot_index" => snapshot_index);
-                return Err(RaftLoopError::Other(format!(
-                    "Snapshot restore failed at index {}: {}",
-                    snapshot_index, e
-                )));
-            }
-
-            // Update applied index to snapshot index
-            raft_node.raw_node_mut().mut_store().set_applied_index(snapshot_index);
-
-            info!(logger, "Snapshot applied successfully";
-                  "index" => snapshot_index,
-                  "term" => snapshot_term,
-                  "kv_entries" => kv_node.get_internal_map().len());
-
-            // Notify TUI
-            let _ = state_tx.send(StateUpdate::SystemMessage(format!(
-                "📸 Applied snapshot at index {} (term {})",
-                snapshot_index, snapshot_term
-            )));
+            self.apply_snapshot(ready.snapshot().clone())?;
         }
 
-        // 2. Append new log entries to storage
         if !ready.entries().is_empty() {
-            debug!(logger, "Appending entries to storage"; "count" => ready.entries().len());
-            let entries = ready.entries();
-
-            if let Err(e) = raft_node.raw_node_mut().mut_store().append(entries) {
-                error!(logger, "Failed to append entries"; "error" => format!("{}", e));
+            debug!(self.logger, "Appending entries to storage"; "count" => ready.entries().len());
+            if let Err(e) = self.raft_node.raw_node_mut().mut_store().append(ready.entries()) {
+                error!(self.logger, "Failed to append entries"; "error" => format!("{}", e));
                 return Err(RaftLoopError::StorageError(e));
             }
         }
 
-        // 3. Persist HardState changes (term, vote, commit)
         if let Some(hs) = ready.hs() {
-            debug!(logger, "Persisting HardState";
-                   "term" => hs.term,
-                   "vote" => hs.vote,
-                   "commit" => hs.commit);
-
-            raft_node.raw_node_mut().mut_store().set_hardstate(hs.clone());
-        }
-
-        // 4. Send regular messages to peers (can be sent before persistence completes)
-        let messages = ready.take_messages();
-        if !messages.is_empty() {
-            debug!(logger, "Sending regular messages to peers"; "count" => messages.len());
-
-            for msg in messages {
-                let to = msg.to;
-                if let Err(e) = transport.send(to, msg) {
-                    warn!(logger, "Failed to send regular message to peer";
-                          "peer" => to,
-                          "error" => format!("{}", e));
-                    // Log but continue - transport errors are non-fatal
-                    // Network may be temporarily down
-                }
+            debug!(self.logger, "Persisting HardState"; "term" => hs.term, "vote" => hs.vote, "commit" => hs.commit);
+            if let Err(e) = self.raft_node.raw_node_mut().mut_store().set_hardstate(hs.clone()) {
+                error!(self.logger, "Failed to persist HardState"; "error" => format!("{}", e));
+                return Err(RaftLoopError::StorageError(e));
             }
         }
 
-        // 5. Send persisted messages to peers (MUST be sent AFTER persistence!)
-        let persisted_messages = ready.take_persisted_messages();
-        if !persisted_messages.is_empty() {
-            debug!(logger, "Sending persisted messages to peers"; "count" => persisted_messages.len());
+        self.send_messages(ready.take_messages());
+        self.send_messages(ready.take_persisted_messages());
 
-            for msg in persisted_messages {
-                let to = msg.to;
-                if let Err(e) = transport.send(to, msg) {
-                    warn!(logger, "Failed to send persisted message to peer";
-                          "peer" => to,
-                          "error" => format!("{}", e));
-                }
-            }
-        }
-
-        // 6. Apply committed entries to state machine
         let committed_entries = ready.take_committed_entries();
         if !committed_entries.is_empty() {
-            for entry in committed_entries {
-                debug!(logger, "Processing committed entry";
-                       "index" => entry.index,
-                       "term" => entry.term);
-
-                // Empty entries can occur during leader election
-                if entry.data.is_empty() {
-                    debug!(logger, "Skipping empty entry (likely from leader election)");
-                    continue;
-                }
-
-                match entry.get_entry_type() {
-                    EntryType::EntryNormal => {
-                        // Decode and apply to KV store
-                        match kv_node.apply_kv_command(&entry.data) {
-                            Ok(_) => {
-                                debug!(logger, "Applied KV command";
-                                       "index" => entry.index);
-
-                                // Extract key/value for state update
-                                // This is a bit inefficient (decode twice) but keeps code clean
-                                // In production, we'd return the key/value from apply_kv_command
-                                if let Ok(cmd) = crate::codec::decode::<crate::kvproto::KvCommand>(&entry.data) {
-                                    if let Some(crate::kvproto::kv_command::Cmd::Put(put)) = cmd.cmd {
-                                        // Send KV update to TUI
-                                        let _ = state_tx.send(StateUpdate::KvUpdate {
-                                            key: put.key.clone(),
-                                            value: put.value.clone(),
-                                        });
-
-                                        // Send log entry summary
-                                        let _ = state_tx.send(StateUpdate::LogEntry {
-                                            index: entry.index,
-                                            term: entry.term,
-                                            data: format!("PUT {} = {}", put.key, put.value),
-                                        });
-
-                                        // Invoke callback if present
-                                        if let Some(callback) = raft_node.take_callback(&entry.context) {
-                                            let response = CommandResponse::Success {
-                                                key: put.key,
-                                                value: put.value,
-                                            };
-                                            let _ = callback.send(response);
-                                        }
-                                    }
-                                }
-                            }
-                            Err(e) => {
-                                warn!(logger, "Failed to apply KV command";
-                                      "error" => format!("{}", e),
-                                      "index" => entry.index);
-                                // Log but continue - apply errors are non-fatal per ROADMAP
-
-                                // Invoke callback with error
-                                if let Some(callback) = raft_node.take_callback(&entry.context) {
-                                    let response = CommandResponse::Error(format!("Apply failed: {}", e));
-                                    let _ = callback.send(response);
-                                }
-                            }
-                        }
-
-                        // Update applied index in storage
-                        raft_node.raw_node_mut().mut_store().set_applied_index(entry.index);
-                    }
-                    EntryType::EntryConfChange => {
-                        // Handle cluster configuration change
-                        info!(logger, "Applying configuration change"; "index" => entry.index);
-                        // TODO: Implement when we support dynamic membership
-                        // For now, just update applied index
-                        raft_node.raw_node_mut().mut_store().set_applied_index(entry.index);
-                    }
-                    EntryType::EntryConfChangeV2 => {
-                        // Handle cluster configuration change (v2)
-                        info!(logger, "Applying configuration change v2"; "index" => entry.index);
-                        // TODO: Implement when we support dynamic membership
-                        raft_node.raw_node_mut().mut_store().set_applied_index(entry.index);
-                    }
-                }
-            }
+            self.apply_committed_entries(committed_entries)?;
         }
 
-        // 7. Send Raft state update to TUI
-        let raft_state = raft_node.get_state();
+        self.update_tui_state();
 
-        // Detect leadership changes
-        // Only log when we GET a new leader (skip intermediate "lost leader" state)
-        if let Some(prev_leader) = previous_leader_id {
-            if prev_leader != raft_state.leader_id && raft_state.leader_id != 0 {
-                let msg = if prev_leader == 0 {
-                    format!("New leader elected: {} (term {})", raft_state.leader_id, raft_state.term)
-                } else {
-                    format!(
-                        "Leadership changed: {} → {} (term {})",
-                        prev_leader,
-                        raft_state.leader_id,
-                        raft_state.term
-                    )
-                };
-                info!(logger, "Leadership changed";
-                      "previous_leader" => prev_leader,
-                      "new_leader" => raft_state.leader_id,
-                      "term" => raft_state.term);
-                let _ = state_tx.send(StateUpdate::SystemMessage(msg));
-            }
-        }
-        previous_leader_id = Some(raft_state.leader_id);
+        let mut light_rd = self.raft_node.raw_node_mut().advance(ready);
 
-        if let Err(_) = state_tx.send(StateUpdate::RaftState(raft_state.clone())) {
-            // TUI might be gone, but Raft continues
-            debug!(logger, "Failed to send state update (TUI disconnected?)");
-        }
-
-        // 8. Advance to next Ready cycle
-        let mut light_rd = raft_node.raw_node_mut().advance(ready);
-
-        // Process LightReady (additional messages and committed entries)
         if let Some(commit) = light_rd.commit_index() {
-            debug!(logger, "LightReady commit index"; "commit" => commit);
-            // Note: We don't need to persist commit index separately here
-            // as it's already handled by the Ready processing above
+            debug!(self.logger, "LightReady commit index"; "commit" => commit);
         }
 
-        // Send any remaining messages from LightReady
-        if !light_rd.messages().is_empty() {
-            debug!(logger, "Sending LightReady messages"; "count" => light_rd.messages().len());
+        self.send_messages(light_rd.messages().to_vec());
 
-            for msg in light_rd.messages() {
-                let to = msg.to;
-                if let Err(e) = transport.send(to, msg.clone()) {
-                    warn!(logger, "Failed to send LightReady message";
-                          "peer" => to,
-                          "error" => format!("{}", e));
-                }
-            }
-        }
-
-        // Apply any committed entries from LightReady
         let light_committed = light_rd.take_committed_entries();
         if !light_committed.is_empty() {
-            for entry in light_committed {
-                debug!(logger, "Processing LightReady committed entry";
-                       "index" => entry.index);
+            self.apply_committed_entries(light_committed)?;
+        }
 
-                if entry.data.is_empty() {
-                    continue;
-                }
+        Ok(())
+    }
 
-                // Same logic as above for committed entries
-                match entry.get_entry_type() {
-                    EntryType::EntryNormal => {
-                        match kv_node.apply_kv_command(&entry.data) {
-                            Ok(_) => {
-                                debug!(logger, "Applied KV command from LightReady";
-                                       "index" => entry.index);
+    fn apply_snapshot(&mut self, snapshot: Snapshot) -> Result<(), RaftLoopError> {
+        let snapshot_index = snapshot.get_metadata().index;
+        let snapshot_term = snapshot.get_metadata().term;
 
-                                if let Ok(cmd) = crate::codec::decode::<crate::kvproto::KvCommand>(&entry.data) {
-                                    if let Some(crate::kvproto::kv_command::Cmd::Put(put)) = cmd.cmd {
-                                        let _ = state_tx.send(StateUpdate::KvUpdate {
-                                            key: put.key.clone(),
-                                            value: put.value.clone(),
-                                        });
+        info!(self.logger, "Applying snapshot"; "index" => snapshot_index, "term" => snapshot_term);
 
-                                        let _ = state_tx.send(StateUpdate::LogEntry {
-                                            index: entry.index,
-                                            term: entry.term,
-                                            data: format!("PUT {} = {}", put.key, put.value),
-                                        });
+        if let Err(e) = self.raft_node.raw_node_mut().mut_store().apply_snapshot(snapshot.clone()) {
+            error!(self.logger, "Failed to apply snapshot"; "error" => format!("{}", e));
+            return Err(RaftLoopError::StorageError(e));
+        }
 
-                                        if let Some(callback) = raft_node.take_callback(&entry.context) {
-                                            let response = CommandResponse::Success {
-                                                key: put.key,
-                                                value: put.value,
-                                            };
-                                            let _ = callback.send(response);
-                                        }
-                                    }
-                                }
-                            }
-                            Err(e) => {
-                                warn!(logger, "Failed to apply KV command from LightReady";
-                                      "error" => format!("{}", e));
+        let snapshot_data = snapshot.get_data();
+        if let Err(e) = self.kv_node.restore_from_snapshot(snapshot_data) {
+            error!(self.logger, "Failed to restore KV state from snapshot"; "error" => format!("{}", e));
+            return Err(RaftLoopError::Other(format!("Snapshot restore failed: {}", e)));
+        }
 
-                                if let Some(callback) = raft_node.take_callback(&entry.context) {
-                                    let response = CommandResponse::Error(format!("Apply failed: {}", e));
-                                    let _ = callback.send(response);
-                                }
+        if let Err(e) = self.raft_node.raw_node_mut().mut_store().set_applied_index(snapshot_index) {
+            error!(self.logger, "Failed to set applied index"; "error" => format!("{}", e));
+            return Err(RaftLoopError::StorageError(e));
+        }
+
+        info!(self.logger, "Snapshot applied successfully");
+        let _ = self.state_tx.send(StateUpdate::SystemMessage(format!(
+            "📸 Applied snapshot at index {} (term {})",
+            snapshot_index, snapshot_term
+        )));
+
+        Ok(())
+    }
+
+    fn send_messages(&self, messages: Vec<Message>) {
+        if messages.is_empty() { return; }
+        debug!(self.logger, "Sending messages"; "count" => messages.len());
+
+        for msg in messages {
+            let to = msg.to;
+            if let Err(e) = self.transport.send(to, msg) {
+                warn!(self.logger, "Failed to send message"; "peer" => to, "error" => format!("{}", e));
+            }
+        }
+    }
+
+    fn apply_committed_entries(&mut self, entries: Vec<Entry>) -> Result<(), RaftLoopError> {
+        for entry in entries {
+            if entry.data.is_empty() { continue; }
+
+            match entry.get_entry_type() {
+                EntryType::EntryNormal => {
+                    match self.kv_node.apply_kv_command(&entry.data) {
+                        Ok(_) => {
+                            debug!(self.logger, "Applied KV command"; "index" => entry.index);
+                            self.notify_kv_update(&entry);
+                        }
+                        Err(e) => {
+                            warn!(self.logger, "Failed to apply KV command"; "error" => format!("{}", e));
+                            if let Some(callback) = self.raft_node.take_callback(&entry.context) {
+                                let _ = callback.send(CommandResponse::Error(format!("Apply failed: {}", e)));
                             }
                         }
+                    }
+                    if let Err(e) = self.raft_node.raw_node_mut().mut_store().set_applied_index(entry.index) {
+                        error!(self.logger, "Failed to set applied index"; "error" => format!("{}", e));
+                        return Err(RaftLoopError::StorageError(e));
+                    }
+                }
+                EntryType::EntryConfChange | EntryType::EntryConfChangeV2 => {
+                    info!(self.logger, "Applying configuration change"; "index" => entry.index);
+                    if let Err(e) = self.raft_node.raw_node_mut().mut_store().set_applied_index(entry.index) {
+                        error!(self.logger, "Failed to set applied index"; "error" => format!("{}", e));
+                        return Err(RaftLoopError::StorageError(e));
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
 
-                        raft_node.raw_node_mut().mut_store().set_applied_index(entry.index);
-                    }
-                    _ => {
-                        raft_node.raw_node_mut().mut_store().set_applied_index(entry.index);
-                    }
+    fn notify_kv_update(&mut self, entry: &Entry) {
+        if let Ok(cmd) = crate::codec::decode::<crate::kvproto::KvCommand>(&entry.data) {
+            if let Some(crate::kvproto::kv_command::Cmd::Put(put)) = cmd.cmd {
+                let _ = self.state_tx.send(StateUpdate::KvUpdate {
+                    key: put.key.clone(),
+                    value: put.value.clone(),
+                });
+                let _ = self.state_tx.send(StateUpdate::LogEntry {
+                    index: entry.index,
+                    term: entry.term,
+                    data: format!("PUT {} = {}", put.key, put.value),
+                });
+
+                if let Some(callback) = self.raft_node.take_callback(&entry.context) {
+                    let _ = callback.send(CommandResponse::Success {
+                        key: put.key,
+                        value: put.value,
+                    });
                 }
             }
         }
     }
+
+    fn update_tui_state(&mut self) {
+        let raft_state = self.raft_node.get_state();
+
+        if let Some(prev_leader) = self.previous_leader_id {
+            if prev_leader != raft_state.leader_id && raft_state.leader_id != 0 {
+                let msg = if prev_leader == 0 {
+                    format!("New leader elected: {} (term {})", raft_state.leader_id, raft_state.term)
+                } else {
+                    format!("Leadership changed: {} → {} (term {})", prev_leader, raft_state.leader_id, raft_state.term)
+                };
+                info!(self.logger, "Leadership changed"; "new_leader" => raft_state.leader_id);
+                let _ = self.state_tx.send(StateUpdate::SystemMessage(msg));
+            }
+        }
+        self.previous_leader_id = Some(raft_state.leader_id);
+
+        let _ = self.state_tx.send(StateUpdate::RaftState(raft_state));
+    }
 }
+
+
