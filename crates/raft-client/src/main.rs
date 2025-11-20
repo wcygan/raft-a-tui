@@ -3,20 +3,21 @@ use std::io;
 use std::time::Duration;
 
 use clap::Parser;
-use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
-use crossterm::terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen};
+use crossterm::event::{self, Event, KeyCode, KeyModifiers};
+use crossterm::terminal::{
+    disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
+};
 use crossterm::ExecutableCommand;
 use ratatui::backend::CrosstermBackend;
-use ratatui::layout::{Constraint, Direction, Layout, Rect};
+use ratatui::layout::{Constraint, Direction, Layout};
 use ratatui::style::{Color, Style};
 use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph};
 use ratatui::Terminal;
 use tokio::time::sleep;
-use tonic::transport::Channel;
-use tonic::{Request, Status};
+use tonic::Request;
 
 use raft_proto::rpc::key_value_service_client::KeyValueServiceClient;
-use raft_proto::rpc::{PutRequest, GetRequest};
+use raft_proto::rpc::{GetRequest, PutRequest};
 
 #[derive(Parser, Debug)]
 #[command(name = "raft-client")]
@@ -35,7 +36,7 @@ struct App {
     input: String,
     input_mode: InputMode,
     messages: Vec<String>,
-    
+
     // Client state
     peers: Vec<String>,
     leader_addr: Option<String>, // Hint for current leader
@@ -60,7 +61,10 @@ impl App {
         // Pick random (or round robin, here just first for simplicity or random)
         use rand::seq::SliceRandom;
         let mut rng = rand::thread_rng();
-        self.peers.choose(&mut rng).unwrap_or(&self.peers[0]).clone()
+        self.peers
+            .choose(&mut rng)
+            .unwrap_or(&self.peers[0])
+            .clone()
     }
 
     async fn handle_command(&mut self, cmd: String) {
@@ -79,7 +83,9 @@ impl App {
                 let key = parts[1].to_string();
                 let value = parts[2..].join(" ");
                 match self.put(key, value).await {
-                    Ok(_) => self.messages.push(format!("PUT Success ({:?})", start.elapsed())),
+                    Ok(_) => self
+                        .messages
+                        .push(format!("PUT Success ({:?})", start.elapsed())),
                     Err(e) => self.messages.push(format!("PUT Error: {}", e)),
                 }
             }
@@ -90,7 +96,9 @@ impl App {
                 }
                 let key = parts[1].to_string();
                 match self.get(key).await {
-                    Ok(val) => self.messages.push(format!("GET: {} ({:?})", val, start.elapsed())),
+                    Ok(val) => self
+                        .messages
+                        .push(format!("GET: {} ({:?})", val, start.elapsed())),
                     Err(e) => self.messages.push(format!("GET Error: {}", e)),
                 }
             }
@@ -104,14 +112,18 @@ impl App {
     }
 
     async fn put(&mut self, key: String, value: String) -> Result<(), String> {
-        for attempt in 0..5 {
+        for _attempt in 0..5 {
             let addr = self.get_target_addr();
             // Ensure http:// prefix
-            let addr = if addr.starts_with("http") { addr.clone() } else { format!("http://{}", addr) };
-            
+            let addr = if addr.starts_with("http") {
+                addr.clone()
+            } else {
+                format!("http://{}", addr)
+            };
+
             let mut client = match KeyValueServiceClient::connect(addr.clone()).await {
                 Ok(c) => c,
-                Err(e) => {
+                Err(_e) => {
                     // Network error, try another peer next time
                     self.leader_addr = None; // Clear hint
                     continue;
@@ -141,15 +153,16 @@ impl App {
                                     let mut grpc_socket = socket_addr;
                                     grpc_socket.set_port(grpc_socket.port() + 1000);
                                     let grpc_url = format!("http://{}", grpc_socket);
-                                    
-                                    self.messages.push(format!("Redirecting to leader: {}", grpc_url));
+
+                                    self.messages
+                                        .push(format!("Redirecting to leader: {}", grpc_url));
                                     self.leader_addr = Some(grpc_url);
                                     continue; // Retry
                                 }
                             }
                         }
                     }
-                    
+
                     // Other error, maybe leader election in progress, just retry with random
                     self.leader_addr = None;
                     sleep(Duration::from_millis(100)).await;
@@ -163,14 +176,23 @@ impl App {
         // Reads can go anywhere, but let's just try target addr
         // Or we could randomly pick one every time for reads to distribute load
         let addr = self.get_target_addr(); // Or random
-        let addr = if addr.starts_with("http") { addr.clone() } else { format!("http://{}", addr) };
+        let addr = if addr.starts_with("http") {
+            addr.clone()
+        } else {
+            format!("http://{}", addr)
+        };
 
-        let mut client = KeyValueServiceClient::connect(addr).await.map_err(|e| e.to_string())?;
+        let mut client = KeyValueServiceClient::connect(addr)
+            .await
+            .map_err(|e| e.to_string())?;
 
         let request = Request::new(GetRequest { key });
-        let response = client.get(request).await.map_err(|e| e.message().to_string())?;
+        let response = client
+            .get(request)
+            .await
+            .map_err(|e| e.message().to_string())?;
         let inner = response.into_inner();
-        
+
         if inner.found {
             Ok(inner.value)
         } else {
@@ -182,7 +204,11 @@ impl App {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     let args = Args::parse();
-    let peers: Vec<String> = args.peers.split(',').map(|s| s.trim().to_string()).collect();
+    let peers: Vec<String> = args
+        .peers
+        .split(',')
+        .map(|s| s.trim().to_string())
+        .collect();
 
     // Setup Terminal
     enable_raw_mode()?;
@@ -198,6 +224,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
         if event::poll(Duration::from_millis(100))? {
             if let Event::Key(key) = event::read()? {
+                if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
+                    break;
+                }
+
                 match app.input_mode {
                     InputMode::Normal => match key.code {
                         KeyCode::Char('q') => break,
@@ -221,7 +251,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                             app.input.pop();
                         }
                         _ => {}
-                    }
+                    },
                 }
             }
         }
@@ -238,15 +268,16 @@ async fn main() -> Result<(), Box<dyn Error>> {
 fn ui(frame: &mut ratatui::Frame, app: &App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Min(1),
-            Constraint::Length(3),
-        ])
+        .constraints([Constraint::Min(1), Constraint::Length(3)])
         .split(frame.area());
 
-    let messages: Vec<ListItem> = app.messages.iter().rev().map(|m| ListItem::new(m.as_str())).collect();
-    let list = List::new(messages)
-        .block(Block::default().borders(Borders::ALL).title("Log"));
+    let messages: Vec<ListItem> = app
+        .messages
+        .iter()
+        .rev()
+        .map(|m| ListItem::new(m.as_str()))
+        .collect();
+    let list = List::new(messages).block(Block::default().borders(Borders::ALL).title("Log"));
     frame.render_widget(list, chunks[0]);
 
     let input = Paragraph::new(app.input.as_str())
@@ -256,11 +287,8 @@ fn ui(frame: &mut ratatui::Frame, app: &App) {
         })
         .block(Block::default().borders(Borders::ALL).title("Input"));
     frame.render_widget(input, chunks[1]);
-    
+
     if matches!(app.input_mode, InputMode::Editing) {
-        frame.set_cursor_position((
-            chunks[1].x + app.input.len() as u16 + 1,
-            chunks[1].y + 1,
-        ));
+        frame.set_cursor_position((chunks[1].x + app.input.len() as u16 + 1, chunks[1].y + 1));
     }
 }
