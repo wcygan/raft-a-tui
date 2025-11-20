@@ -80,15 +80,15 @@ impl DiskStorage {
         // Persist to disk
         let bytes = bincode::encode_to_vec(&index, bincode::config::standard())
             .map_err(|e| raft::Error::Store(raft::StorageError::Other(Box::new(e))))?;
-        
+
         self.meta_tree
             .insert("applied_index", bytes.as_slice())
             .map_err(|e| raft::Error::Store(raft::StorageError::Other(Box::new(e))))?;
-            
+
         self.meta_tree
             .flush()
             .map_err(|e| raft::Error::Store(raft::StorageError::Other(Box::new(e))))?;
-            
+
         Ok(())
     }
 
@@ -140,9 +140,8 @@ impl DiskStorage {
         // (we no longer need them since snapshot covers that range)
         let mut to_remove = Vec::new();
         for result in self.entries_tree.iter() {
-            let (key, _) = result.map_err(|e| {
-                raft::Error::Store(raft::StorageError::Other(Box::new(e)))
-            })?;
+            let (key, _) =
+                result.map_err(|e| raft::Error::Store(raft::StorageError::Other(Box::new(e))))?;
             let index = key_to_index(&key);
             if index <= snapshot_index {
                 to_remove.push(key.to_vec());
@@ -150,9 +149,9 @@ impl DiskStorage {
         }
 
         for key in to_remove {
-            self.entries_tree.remove(key).map_err(|e| {
-                raft::Error::Store(raft::StorageError::Other(Box::new(e)))
-            })?;
+            self.entries_tree
+                .remove(key)
+                .map_err(|e| raft::Error::Store(raft::StorageError::Other(Box::new(e))))?;
         }
 
         // Flush to ensure durability
@@ -175,15 +174,33 @@ impl DiskStorage {
     pub fn set_hardstate(&mut self, hs: HardState) -> RaftResult<()> {
         let bytes = encode_proto(&hs)
             .map_err(|e| raft::Error::Store(raft::StorageError::Other(Box::new(e))))?;
-            
+
         self.meta_tree
             .insert("hardstate", bytes.as_slice())
             .map_err(|e| raft::Error::Store(raft::StorageError::Other(Box::new(e))))?;
-            
+
         self.meta_tree
             .flush()
             .map_err(|e| raft::Error::Store(raft::StorageError::Other(Box::new(e))))?;
-            
+
+        Ok(())
+    }
+
+    /// Set the ConfState.
+    ///
+    /// This persists the ConfState to disk immediately.
+    pub fn set_conf_state(&mut self, cs: ConfState) -> RaftResult<()> {
+        let bytes = encode_proto(&cs)
+            .map_err(|e| raft::Error::Store(raft::StorageError::Other(Box::new(e))))?;
+
+        self.meta_tree
+            .insert("confstate", bytes.as_slice())
+            .map_err(|e| raft::Error::Store(raft::StorageError::Other(Box::new(e))))?;
+
+        self.meta_tree
+            .flush()
+            .map_err(|e| raft::Error::Store(raft::StorageError::Other(Box::new(e))))?;
+
         Ok(())
     }
 
@@ -194,9 +211,8 @@ impl DiskStorage {
         let mut to_remove = Vec::new();
 
         for result in self.entries_tree.iter() {
-            let (key, _) = result.map_err(|e| {
-                raft::Error::Store(raft::StorageError::Other(Box::new(e)))
-            })?;
+            let (key, _) =
+                result.map_err(|e| raft::Error::Store(raft::StorageError::Other(Box::new(e))))?;
             let index = key_to_index(&key);
             if index <= compact_index {
                 to_remove.push(key.to_vec());
@@ -204,9 +220,9 @@ impl DiskStorage {
         }
 
         for key in to_remove {
-            self.entries_tree.remove(key).map_err(|e| {
-                raft::Error::Store(raft::StorageError::Other(Box::new(e)))
-            })?;
+            self.entries_tree
+                .remove(key)
+                .map_err(|e| raft::Error::Store(raft::StorageError::Other(Box::new(e))))?;
         }
 
         self.entries_tree
@@ -218,12 +234,13 @@ impl DiskStorage {
 
     /// Get the latest snapshot from disk (if any).
     fn get_latest_snapshot(&self) -> RaftResult<Option<Snapshot>> {
-        if let Some(bytes) = self.snapshots_tree.get("latest").map_err(|e| {
-            raft::Error::Store(raft::StorageError::Other(Box::new(e)))
-        })? {
-            let snapshot: Snapshot = decode_proto(&bytes).map_err(|e| {
-                raft::Error::Store(raft::StorageError::Other(e))
-            })?;
+        if let Some(bytes) = self
+            .snapshots_tree
+            .get("latest")
+            .map_err(|e| raft::Error::Store(raft::StorageError::Other(Box::new(e))))?
+        {
+            let snapshot: Snapshot = decode_proto(&bytes)
+                .map_err(|e| raft::Error::Store(raft::StorageError::Other(e)))?;
             Ok(Some(snapshot))
         } else {
             Ok(None)
@@ -234,12 +251,13 @@ impl DiskStorage {
     fn get_entry(&self, index: u64) -> RaftResult<Option<Entry>> {
         let key = index_to_key(index);
 
-        if let Some(bytes) = self.entries_tree.get(key).map_err(|e| {
-            raft::Error::Store(raft::StorageError::Other(Box::new(e)))
-        })? {
-            let entry: Entry = decode_proto(&bytes).map_err(|e| {
-                raft::Error::Store(raft::StorageError::Other(e))
-            })?;
+        if let Some(bytes) = self
+            .entries_tree
+            .get(key)
+            .map_err(|e| raft::Error::Store(raft::StorageError::Other(Box::new(e))))?
+        {
+            let entry: Entry = decode_proto(&bytes)
+                .map_err(|e| raft::Error::Store(raft::StorageError::Other(e)))?;
             Ok(Some(entry))
         } else {
             Ok(None)
@@ -250,23 +268,23 @@ impl DiskStorage {
 impl Storage for DiskStorage {
     fn initial_state(&self) -> RaftResult<RaftState> {
         // Load HardState from disk (or use default)
-        let hard_state = if let Some(bytes) = self.meta_tree.get("hardstate").map_err(|e| {
-            raft::Error::Store(raft::StorageError::Other(Box::new(e)))
-        })? {
-            decode_proto(&bytes).map_err(|e| {
-                raft::Error::Store(raft::StorageError::Other(e))
-            })?
+        let hard_state = if let Some(bytes) = self
+            .meta_tree
+            .get("hardstate")
+            .map_err(|e| raft::Error::Store(raft::StorageError::Other(Box::new(e))))?
+        {
+            decode_proto(&bytes).map_err(|e| raft::Error::Store(raft::StorageError::Other(e)))?
         } else {
             HardState::default()
         };
 
         // Load ConfState from disk (or use default)
-        let conf_state = if let Some(bytes) = self.meta_tree.get("confstate").map_err(|e| {
-            raft::Error::Store(raft::StorageError::Other(Box::new(e)))
-        })? {
-            decode_proto(&bytes).map_err(|e| {
-                raft::Error::Store(raft::StorageError::Other(e))
-            })?
+        let conf_state = if let Some(bytes) = self
+            .meta_tree
+            .get("confstate")
+            .map_err(|e| raft::Error::Store(raft::StorageError::Other(Box::new(e))))?
+        {
+            decode_proto(&bytes).map_err(|e| raft::Error::Store(raft::StorageError::Other(e)))?
         } else {
             ConfState::default()
         };
@@ -341,9 +359,8 @@ impl Storage for DiskStorage {
 
         // Otherwise, find the first entry in the log
         if let Some(result) = self.entries_tree.iter().next() {
-            let (key, _) = result.map_err(|e| {
-                raft::Error::Store(raft::StorageError::Other(Box::new(e)))
-            })?;
+            let (key, _) =
+                result.map_err(|e| raft::Error::Store(raft::StorageError::Other(Box::new(e))))?;
             Ok(key_to_index(&key))
         } else {
             // No entries at all, return 1 (default)
@@ -354,9 +371,8 @@ impl Storage for DiskStorage {
     fn last_index(&self) -> RaftResult<u64> {
         // Find the last entry in the log
         if let Some(result) = self.entries_tree.iter().next_back() {
-            let (key, _) = result.map_err(|e| {
-                raft::Error::Store(raft::StorageError::Other(Box::new(e)))
-            })?;
+            let (key, _) =
+                result.map_err(|e| raft::Error::Store(raft::StorageError::Other(Box::new(e))))?;
             Ok(key_to_index(&key))
         } else if let Some(snapshot) = self.get_latest_snapshot()? {
             // No entries, but we have a snapshot

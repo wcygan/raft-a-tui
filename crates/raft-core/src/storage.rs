@@ -126,6 +126,17 @@ impl RaftStorage {
         }
     }
 
+    /// Set the ConfState.
+    pub fn set_conf_state(&mut self, cs: ConfState) -> RaftResult<()> {
+        match self {
+            Self::Memory { inner, .. } => {
+                inner.wl().set_conf_state(cs);
+                Ok(())
+            }
+            Self::Disk(disk) => disk.set_conf_state(cs),
+        }
+    }
+
     /// Compact the log up to the given index.
     pub fn compact(&mut self, compact_index: u64) -> RaftResult<()> {
         match self {

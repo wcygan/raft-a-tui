@@ -1,10 +1,10 @@
 use std::time::{Duration, Instant};
 
-use crossbeam_channel::{Receiver, Sender, select};
+use crossbeam_channel::{select, Receiver, Sender};
 use raft::prelude::*;
 use slog::{debug, error, info, warn};
 
-use crate::commands::{ServerCommand, UserCommand, RpcCommand};
+use crate::commands::{RpcCommand, ServerCommand, UserCommand};
 use crate::network::{Transport, TransportError};
 use crate::node::Node;
 use crate::raft_node::{RaftNode, RaftState};
@@ -199,12 +199,15 @@ impl<T: Transport> RaftDriver<T> {
         match cmd {
             RpcCommand::Put { key, value, resp } => {
                 if !self.raft_node.is_leader() {
-                     let state = self.raft_node.get_state();
-                     let _ = resp.send(Err(format!("Not leader: {}", state.leader_id)));
-                     return Ok(());
+                    let state = self.raft_node.get_state();
+                    let _ = resp.send(Err(format!("Not leader: {}", state.leader_id)));
+                    return Ok(());
                 }
 
-                match self.raft_node.propose_command(key.clone(), value.clone(), Some(resp)) {
+                match self
+                    .raft_node
+                    .propose_command(key.clone(), value.clone(), Some(resp))
+                {
                     Ok(_) => {
                         debug!(self.logger, "Proposed RPC PUT"; "key" => &key);
                     }
@@ -230,12 +233,16 @@ impl<T: Transport> RaftDriver<T> {
 
         match cmd {
             UserCommand::Put { key, value } => {
-                match self.raft_node.propose_command(key.clone(), value.clone(), None) {
+                match self
+                    .raft_node
+                    .propose_command(key.clone(), value.clone(), None)
+                {
                     Ok(_) => {
                         debug!(self.logger, "Proposed PUT command"; "key" => &key, "value" => &value);
-                        let _ = self.state_tx.send(StateUpdate::SystemMessage(
-                            format!("Proposed: PUT {} = {}", key, value)
-                        ));
+                        let _ = self.state_tx.send(StateUpdate::SystemMessage(format!(
+                            "Proposed: PUT {} = {}",
+                            key, value
+                        )));
                         // No callback for TUI
                     }
                     Err(raft::Error::ProposalDropped) => {
@@ -251,15 +258,17 @@ impl<T: Transport> RaftDriver<T> {
                               "role" => format!("{:?}", state.role),
                               "leader_id" => state.leader_id);
 
-                        let _ = self.state_tx.send(StateUpdate::SystemMessage(
-                            format!("ERROR: Not leader ({}) - writes must go to leader", leader_hint)
-                        ));
+                        let _ = self.state_tx.send(StateUpdate::SystemMessage(format!(
+                            "ERROR: Not leader ({}) - writes must go to leader",
+                            leader_hint
+                        )));
                     }
                     Err(e) => {
                         warn!(self.logger, "Failed to propose command"; "error" => format!("{}", e));
-                        let _ = self.state_tx.send(StateUpdate::SystemMessage(
-                            format!("Error: Failed to propose PUT ({})", e)
-                        ));
+                        let _ = self.state_tx.send(StateUpdate::SystemMessage(format!(
+                            "Error: Failed to propose PUT ({})",
+                            e
+                        )));
                     }
                 }
             }
@@ -269,7 +278,7 @@ impl<T: Transport> RaftDriver<T> {
                 } else {
                     info!(self.logger, "Starting election campaign");
                     let _ = self.state_tx.send(StateUpdate::SystemMessage(
-                        "Starting election campaign".to_string()
+                        "Starting election campaign".to_string(),
                     ));
                 }
             }
@@ -320,13 +329,20 @@ impl<T: Transport> RaftDriver<T> {
                "num_persisted_messages" => ready.persisted_messages().len(),
                "num_committed" => ready.committed_entries().len());
 
+        self.send_messages(ready.take_messages());
+
         if !ready.snapshot().is_empty() {
             self.apply_snapshot(ready.snapshot().clone())?;
         }
 
         if !ready.entries().is_empty() {
             debug!(self.logger, "Appending entries to storage"; "count" => ready.entries().len());
-            if let Err(e) = self.raft_node.raw_node_mut().mut_store().append(ready.entries()) {
+            if let Err(e) = self
+                .raft_node
+                .raw_node_mut()
+                .mut_store()
+                .append(ready.entries())
+            {
                 error!(self.logger, "Failed to append entries"; "error" => format!("{}", e));
                 return Err(RaftLoopError::StorageError(e));
             }
@@ -334,13 +350,17 @@ impl<T: Transport> RaftDriver<T> {
 
         if let Some(hs) = ready.hs() {
             debug!(self.logger, "Persisting HardState"; "term" => hs.term, "vote" => hs.vote, "commit" => hs.commit);
-            if let Err(e) = self.raft_node.raw_node_mut().mut_store().set_hardstate(hs.clone()) {
+            if let Err(e) = self
+                .raft_node
+                .raw_node_mut()
+                .mut_store()
+                .set_hardstate(hs.clone())
+            {
                 error!(self.logger, "Failed to persist HardState"; "error" => format!("{}", e));
                 return Err(RaftLoopError::StorageError(e));
             }
         }
 
-        self.send_messages(ready.take_messages());
         self.send_messages(ready.take_persisted_messages());
 
         let committed_entries = ready.take_committed_entries();
@@ -372,7 +392,12 @@ impl<T: Transport> RaftDriver<T> {
 
         info!(self.logger, "Applying snapshot"; "index" => snapshot_index, "term" => snapshot_term);
 
-        if let Err(e) = self.raft_node.raw_node_mut().mut_store().apply_snapshot(snapshot.clone()) {
+        if let Err(e) = self
+            .raft_node
+            .raw_node_mut()
+            .mut_store()
+            .apply_snapshot(snapshot.clone())
+        {
             error!(self.logger, "Failed to apply snapshot"; "error" => format!("{}", e));
             return Err(RaftLoopError::StorageError(e));
         }
@@ -380,10 +405,18 @@ impl<T: Transport> RaftDriver<T> {
         let snapshot_data = snapshot.get_data();
         if let Err(e) = self.kv_node.restore_from_snapshot(snapshot_data) {
             error!(self.logger, "Failed to restore KV state from snapshot"; "error" => format!("{}", e));
-            return Err(RaftLoopError::Other(format!("Snapshot restore failed: {}", e)));
+            return Err(RaftLoopError::Other(format!(
+                "Snapshot restore failed: {}",
+                e
+            )));
         }
 
-        if let Err(e) = self.raft_node.raw_node_mut().mut_store().set_applied_index(snapshot_index) {
+        if let Err(e) = self
+            .raft_node
+            .raw_node_mut()
+            .mut_store()
+            .set_applied_index(snapshot_index)
+        {
             error!(self.logger, "Failed to set applied index"; "error" => format!("{}", e));
             return Err(RaftLoopError::StorageError(e));
         }
@@ -398,7 +431,9 @@ impl<T: Transport> RaftDriver<T> {
     }
 
     fn send_messages(&self, messages: Vec<Message>) {
-        if messages.is_empty() { return; }
+        if messages.is_empty() {
+            return;
+        }
         debug!(self.logger, "Sending messages"; "count" => messages.len());
 
         for msg in messages {
@@ -411,7 +446,9 @@ impl<T: Transport> RaftDriver<T> {
 
     fn apply_committed_entries(&mut self, entries: Vec<Entry>) -> Result<(), RaftLoopError> {
         for entry in entries {
-            if entry.data.is_empty() { continue; }
+            if entry.data.is_empty() {
+                continue;
+            }
 
             match entry.get_entry_type() {
                 EntryType::EntryNormal => {
@@ -427,14 +464,74 @@ impl<T: Transport> RaftDriver<T> {
                             }
                         }
                     }
-                    if let Err(e) = self.raft_node.raw_node_mut().mut_store().set_applied_index(entry.index) {
+                    if let Err(e) = self
+                        .raft_node
+                        .raw_node_mut()
+                        .mut_store()
+                        .set_applied_index(entry.index)
+                    {
                         error!(self.logger, "Failed to set applied index"; "error" => format!("{}", e));
                         return Err(RaftLoopError::StorageError(e));
                     }
                 }
-                EntryType::EntryConfChange | EntryType::EntryConfChangeV2 => {
+                EntryType::EntryConfChange => {
                     info!(self.logger, "Applying configuration change"; "index" => entry.index);
-                    if let Err(e) = self.raft_node.raw_node_mut().mut_store().set_applied_index(entry.index) {
+                    let mut cc = ConfChange::default();
+                    if let Err(e) = prost_011::Message::merge(&mut cc, &entry.data[..]) {
+                        error!(self.logger, "Failed to decode ConfChange"; "error" => format!("{}", e));
+                        continue;
+                    }
+
+                    let cs = match self.raft_node.raw_node_mut().apply_conf_change(&cc) {
+                        Ok(cs) => cs,
+                        Err(e) => {
+                            error!(self.logger, "Failed to apply ConfChange"; "error" => format!("{}", e));
+                            continue;
+                        }
+                    };
+
+                    if let Err(e) = self.raft_node.raw_node_mut().mut_store().set_conf_state(cs) {
+                        error!(self.logger, "Failed to persist ConfState"; "error" => format!("{}", e));
+                        return Err(RaftLoopError::StorageError(e));
+                    }
+
+                    if let Err(e) = self
+                        .raft_node
+                        .raw_node_mut()
+                        .mut_store()
+                        .set_applied_index(entry.index)
+                    {
+                        error!(self.logger, "Failed to set applied index"; "error" => format!("{}", e));
+                        return Err(RaftLoopError::StorageError(e));
+                    }
+                }
+                EntryType::EntryConfChangeV2 => {
+                    info!(self.logger, "Applying configuration change V2"; "index" => entry.index);
+                    let mut cc = ConfChangeV2::default();
+                    if let Err(e) = prost_011::Message::merge(&mut cc, &entry.data[..]) {
+                        error!(self.logger, "Failed to decode ConfChangeV2"; "error" => format!("{}", e));
+                        continue;
+                    }
+
+                    let cs = match self.raft_node.raw_node_mut().apply_conf_change(&cc) {
+                        Ok(cs) => cs,
+                        Err(e) => {
+                            error!(self.logger, "Failed to apply ConfChangeV2"; "error" => format!("{}", e));
+                            continue;
+                        }
+                    };
+
+                    if let Err(e) = self.raft_node.raw_node_mut().mut_store().set_conf_state(cs) {
+                        error!(self.logger, "Failed to persist ConfState"; "error" => format!("{}", e));
+                        return Err(RaftLoopError::StorageError(e));
+                    }
+
+                    if let Err(e) = self
+                        .raft_node
+                        .raw_node_mut()
+                        .mut_store()
+                        .set_applied_index(entry.index)
+                    {
                         error!(self.logger, "Failed to set applied index"; "error" => format!("{}", e));
                         return Err(RaftLoopError::StorageError(e));
                     }
@@ -470,9 +567,15 @@ impl<T: Transport> RaftDriver<T> {
         if let Some(prev_leader) = self.previous_leader_id {
             if prev_leader != raft_state.leader_id && raft_state.leader_id != 0 {
                 let msg = if prev_leader == 0 {
-                    format!("New leader elected: {} (term {})", raft_state.leader_id, raft_state.term)
+                    format!(
+                        "New leader elected: {} (term {})",
+                        raft_state.leader_id, raft_state.term
+                    )
                 } else {
-                    format!("Leadership changed: {} → {} (term {})", prev_leader, raft_state.leader_id, raft_state.term)
+                    format!(
+                        "Leadership changed: {} → {} (term {})",
+                        prev_leader, raft_state.leader_id, raft_state.term
+                    )
                 };
                 info!(self.logger, "Leadership changed"; "new_leader" => raft_state.leader_id);
                 let _ = self.state_tx.send(StateUpdate::SystemMessage(msg));
