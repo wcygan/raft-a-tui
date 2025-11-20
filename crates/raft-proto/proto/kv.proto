@@ -1,0 +1,14 @@
+syntax = "proto3";
+
+package kvraft;
+
+message Put {
+  string key = 1;
+  string value = 2;
+}
+
+message KvCommand {
+  oneof cmd {
+    Put put = 1;
+  }
+}

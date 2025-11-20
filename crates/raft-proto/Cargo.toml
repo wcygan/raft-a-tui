@@ -1,0 +1,14 @@
+[package]
+name = "raft-proto"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+prost = "0.13"
+prost-types = "0.13"
+prost_011 = { package = "prost", version = "0.11.9" }
+tonic = "0.12"
+
+[build-dependencies]
+prost-build = "0.13"
+tonic-build = "0.12"
