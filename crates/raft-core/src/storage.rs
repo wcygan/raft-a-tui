@@ -22,6 +22,12 @@ pub enum RaftStorage {
     Disk(DiskStorage),
 }
 
+impl Default for RaftStorage {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl RaftStorage {
     /// Create a new in-memory RaftStorage with empty state.
     pub fn new() -> Self {

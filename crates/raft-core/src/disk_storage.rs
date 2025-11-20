@@ -78,7 +78,7 @@ impl DiskStorage {
         *self.applied_index.lock().unwrap() = index;
 
         // Persist to disk
-        let bytes = bincode::encode_to_vec(&index, bincode::config::standard())
+        let bytes = bincode::encode_to_vec(index, bincode::config::standard())
             .map_err(|e| raft::Error::Store(raft::StorageError::Other(Box::new(e))))?;
 
         self.meta_tree

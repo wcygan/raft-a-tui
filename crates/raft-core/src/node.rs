@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use crate::codec::{decode, encode};
 use crate::commands::UserCommand;
-use raft_proto::kvraft::{KvCommand, Put, kv_command};
+use raft_proto::kvraft::{kv_command, KvCommand, Put};
 
 /// Output from a user command.
 #[derive(Debug, PartialEq, Eq)]
@@ -13,6 +13,12 @@ pub enum NodeOutput {
 
 pub struct Node {
     kv: BTreeMap<String, String>,
+}
+
+impl Default for Node {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Node {
@@ -95,8 +101,7 @@ impl Node {
     /// - `Ok(Vec<u8>)` - Serialized snapshot data
     /// - `Err(...)` - Serialization error (should never happen for BTreeMap)
     pub fn create_snapshot(&self) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
-        bincode::encode_to_vec(&self.kv, bincode::config::standard())
-            .map_err(|e| e.into())
+        bincode::encode_to_vec(&self.kv, bincode::config::standard()).map_err(|e| e.into())
     }
 
     /// Restore KV state from a snapshot.

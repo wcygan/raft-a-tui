@@ -189,10 +189,7 @@ fn handle_connection(
                 // Forward to ready loop
                 if let Err(e) = msg_tx.send(msg) {
                     error!(logger, "Failed to forward message to ready loop"; "error" => format!("{}", e));
-                    return Err(io::Error::new(
-                        io::ErrorKind::Other,
-                        "msg_tx channel closed",
-                    ));
+                    return Err(io::Error::other("msg_tx channel closed"));
                 }
             }
             Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => {
