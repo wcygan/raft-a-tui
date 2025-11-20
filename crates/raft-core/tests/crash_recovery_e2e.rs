@@ -1,7 +1,7 @@
 use raft::Storage;
-use raft_a_tui::node::Node;
-use raft_a_tui::raft_node::RaftNode;
-use raft_a_tui::storage::RaftStorage;
+use raft_core::node::Node;
+use raft_core::raft_node::RaftNode;
+use raft_core::storage::RaftStorage;
 use slog::{o, Drain, Logger};
 use tempfile::TempDir;
 

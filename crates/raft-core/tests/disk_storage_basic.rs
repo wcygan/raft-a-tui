@@ -2,7 +2,7 @@ use tempfile::TempDir;
 
 use raft::prelude::*;
 use raft::storage::Storage;
-use raft_a_tui::disk_storage::DiskStorage;
+use raft_core::disk_storage::DiskStorage;
 
 /// Helper to create a temporary directory for tests.
 fn temp_dir() -> TempDir {

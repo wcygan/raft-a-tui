@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use crossbeam_channel::bounded;
 use raft::prelude::Message;
-use raft_a_tui::network::{LocalTransport, Transport, TransportError};
+use raft_core::network::{LocalTransport, Transport, TransportError};
 
 #[test]
 fn test_send_message_to_peer() {

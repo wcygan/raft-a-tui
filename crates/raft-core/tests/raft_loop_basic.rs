@@ -4,20 +4,20 @@ use std::time::Duration;
 
 use crossbeam_channel::{unbounded, Receiver, Sender};
 use raft::prelude::*;
-use raft_a_tui::commands::UserCommand;
-use raft_a_tui::network::LocalTransport;
-use raft_a_tui::node::Node;
-use raft_a_tui::raft_loop::{RaftDriver, RaftLoopError, StateUpdate};
-use raft_a_tui::raft_node::RaftNode;
-use raft_a_tui::storage::RaftStorage;
-use raft_a_tui::network::Transport;
+use raft_core::commands::{ServerCommand, UserCommand};
+use raft_core::network::LocalTransport;
+use raft_core::network::Transport;
+use raft_core::node::Node;
+use raft_core::raft_loop::{RaftDriver, RaftLoopError, StateUpdate};
+use raft_core::raft_node::RaftNode;
+use raft_core::storage::RaftStorage;
 use slog::o;
 
 /// Helper wrapper to adapt tests to RaftDriver
 fn raft_ready_loop<T: Transport>(
     raft_node: RaftNode,
     kv_node: Node,
-    cmd_rx: Receiver<UserCommand>,
+    cmd_rx: Receiver<ServerCommand>,
     msg_rx: Receiver<Message>,
     state_tx: Sender<StateUpdate>,
     transport: T,
@@ -50,8 +50,8 @@ fn create_test_raft_node(id: u64, peers: Vec<u64>) -> RaftNode {
 
 /// Helper to create channels for the ready loop
 fn create_test_channels() -> (
-    Sender<UserCommand>,
-    Receiver<UserCommand>,
+    Sender<ServerCommand>,
+    Receiver<ServerCommand>,
     Sender<Message>,
     Receiver<Message>,
     Sender<StateUpdate>,
@@ -222,16 +222,16 @@ fn test_ready_loop_handles_user_commands() {
 
     // Send a GET command (read-only, should be handled locally)
     cmd_tx
-        .send(UserCommand::Get {
+        .send(ServerCommand::User(UserCommand::Get {
             key: "test".to_string(),
-        })
+        }))
         .unwrap();
 
     // Give loop time to process
     thread::sleep(Duration::from_millis(100));
 
     // Send a KEYS command
-    cmd_tx.send(UserCommand::Keys).unwrap();
+    cmd_tx.send(ServerCommand::User(UserCommand::Keys)).unwrap();
 
     // Give loop time to process
     thread::sleep(Duration::from_millis(100));
@@ -240,7 +240,10 @@ fn test_ready_loop_handles_user_commands() {
     shutdown_tx.send(()).unwrap();
 
     let result = handle.join().expect("Thread panicked");
-    assert!(result.is_ok(), "Ready loop should handle commands and exit cleanly");
+    assert!(
+        result.is_ok(),
+        "Ready loop should handle commands and exit cleanly"
+    );
 
     // We should have received some state updates
     // Note: We might not receive specific updates for read-only commands
@@ -341,7 +344,10 @@ fn test_ready_loop_handles_raft_messages() {
     shutdown_tx.send(()).unwrap();
 
     let result = handle.join().expect("Thread panicked");
-    assert!(result.is_ok(), "Ready loop should handle messages and exit cleanly");
+    assert!(
+        result.is_ok(),
+        "Ready loop should handle messages and exit cleanly"
+    );
 }
 
 #[test]
@@ -377,7 +383,10 @@ fn test_ready_loop_ticks_periodically() {
     shutdown_tx.send(()).unwrap();
 
     let result = handle.join().expect("Thread panicked");
-    assert!(result.is_ok(), "Ready loop should run and tick periodically");
+    assert!(
+        result.is_ok(),
+        "Ready loop should run and tick periodically"
+    );
 }
 
 #[test]
@@ -405,7 +414,9 @@ fn test_ready_loop_handles_campaign_command() {
     thread::sleep(Duration::from_millis(50));
 
     // Send CAMPAIGN command
-    cmd_tx.send(UserCommand::Campaign).unwrap();
+    cmd_tx
+        .send(ServerCommand::User(UserCommand::Campaign))
+        .unwrap();
 
     // Give loop time to process
     thread::sleep(Duration::from_millis(100));
@@ -459,10 +470,10 @@ fn test_ready_loop_handles_put_command() {
     // Send PUT command
     // Note: This will propose to Raft, but with a single node, it should commit immediately
     cmd_tx
-        .send(UserCommand::Put {
-            key: "foo".to_string(),
-            value: "bar".to_string(),
-        })
+        .send(ServerCommand::User(UserCommand::Put {
+            key: "test".to_string(),
+            value: "value".to_string(),
+        }))
         .unwrap();
 
     // Give loop time to process and potentially commit
@@ -503,10 +514,10 @@ fn test_single_node_commit_emits_kv_update() {
 
     // Send PUT command
     cmd_tx
-        .send(UserCommand::Put {
-            key: "test_key".to_string(),
-            value: "test_value".to_string(),
-        })
+        .send(ServerCommand::User(UserCommand::Put {
+            key: "test".to_string(),
+            value: "value".to_string(),
+        }))
         .unwrap();
 
     // Wait for the command to be processed and potentially committed
@@ -571,10 +582,10 @@ fn test_multiple_commands_produce_state_updates() {
     // Send multiple commands
     for i in 0..3 {
         cmd_tx
-            .send(UserCommand::Put {
+            .send(ServerCommand::User(UserCommand::Put {
                 key: format!("key_{}", i),
                 value: format!("value_{}", i),
-            })
+            }))
             .unwrap();
         thread::sleep(Duration::from_millis(100));
     }
@@ -621,7 +632,10 @@ fn test_multiple_commands_produce_state_updates() {
 
     // If we do get updates, verify they're well-formed
     if !updates.is_empty() {
-        println!("Successfully received and processed {} state updates", updates.len());
+        println!(
+            "Successfully received and processed {} state updates",
+            updates.len()
+        );
     } else {
         println!("No Ready state to process in this test run (timing-dependent)");
     }
@@ -632,13 +646,9 @@ fn test_transport_send_failures_dont_crash_loop() {
     // Create a transport that always fails
     struct FailingTransport;
 
-    impl raft_a_tui::network::Transport for FailingTransport {
-        fn send(
-            &self,
-            to: u64,
-            _msg: Message,
-        ) -> Result<(), raft_a_tui::network::TransportError> {
-            Err(raft_a_tui::network::TransportError::ChannelFull(to))
+    impl raft_core::network::Transport for FailingTransport {
+        fn send(&self, to: u64, _msg: Message) -> Result<(), raft_core::network::TransportError> {
+            Err(raft_core::network::TransportError::ChannelFull(to))
         }
     }
 
@@ -681,10 +691,10 @@ fn test_transport_send_failures_dont_crash_loop() {
 
     // Send a command (will also try to send messages when becoming leader)
     cmd_tx
-        .send(UserCommand::Put {
+        .send(ServerCommand::User(UserCommand::Put {
             key: "test".to_string(),
             value: "value".to_string(),
-        })
+        }))
         .unwrap();
 
     thread::sleep(Duration::from_millis(200));
@@ -742,10 +752,7 @@ fn test_malformed_entry_handling() {
     shutdown_tx.send(()).unwrap();
 
     let result = handle.join().expect("Thread panicked");
-    assert!(
-        result.is_ok(),
-        "Ready loop should handle entry processing"
-    );
+    assert!(result.is_ok(), "Ready loop should handle entry processing");
 }
 
 #[test]
@@ -777,16 +784,18 @@ fn test_read_only_commands_dont_go_through_raft() {
 
     // Send read-only commands
     cmd_tx
-        .send(UserCommand::Get {
+        .send(ServerCommand::User(UserCommand::Get {
             key: "test".to_string(),
-        })
+        }))
         .unwrap();
     thread::sleep(Duration::from_millis(50));
 
-    cmd_tx.send(UserCommand::Keys).unwrap();
+    cmd_tx.send(ServerCommand::User(UserCommand::Keys)).unwrap();
     thread::sleep(Duration::from_millis(50));
 
-    cmd_tx.send(UserCommand::Status).unwrap();
+    cmd_tx
+        .send(ServerCommand::User(UserCommand::Status))
+        .unwrap();
     thread::sleep(Duration::from_millis(50));
 
     // Shutdown

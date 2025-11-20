@@ -1,6 +1,6 @@
-use raft_a_tui::commands::UserCommand;
-use raft_a_tui::node::Node;
-use raft_a_tui::node::NodeOutput::Text;
+use raft_core::commands::UserCommand;
+use raft_core::node::Node;
+use raft_core::node::NodeOutput::Text;
 
 #[test]
 fn test_put_and_get() {

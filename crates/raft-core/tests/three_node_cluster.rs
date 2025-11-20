@@ -4,20 +4,20 @@ use std::time::Duration;
 
 use crossbeam_channel::{unbounded, Receiver, Sender};
 use raft::prelude::Message;
-use raft_a_tui::commands::UserCommand;
-use raft_a_tui::network::LocalTransport;
-use raft_a_tui::node::Node;
-use raft_a_tui::raft_loop::{RaftDriver, RaftLoopError, StateUpdate};
-use raft_a_tui::raft_node::{RaftNode, RaftState};
-use raft_a_tui::storage::RaftStorage;
-use raft_a_tui::network::Transport;
+use raft_core::commands::{ServerCommand, UserCommand};
+use raft_core::network::LocalTransport;
+use raft_core::network::Transport;
+use raft_core::node::Node;
+use raft_core::raft_loop::{RaftDriver, RaftLoopError, StateUpdate};
+use raft_core::raft_node::{RaftNode, RaftState};
+use raft_core::storage::RaftStorage;
 use slog::{o, Drain};
 
 /// Helper wrapper to adapt tests to RaftDriver
 fn raft_ready_loop<T: Transport>(
     raft_node: RaftNode,
     kv_node: Node,
-    cmd_rx: Receiver<UserCommand>,
+    cmd_rx: Receiver<ServerCommand>,
     msg_rx: Receiver<Message>,
     state_tx: Sender<StateUpdate>,
     transport: T,
@@ -47,16 +47,16 @@ fn test_logger(node_id: u64) -> slog::Logger {
 /// A running Raft node with all its channels.
 struct TestNode {
     node_id: u64,
-    cmd_tx: Sender<UserCommand>,
+    cmd_tx: Sender<ServerCommand>,
     state_rx: Receiver<StateUpdate>,
     shutdown_tx: Sender<()>,
-    handle: thread::JoinHandle<Result<(), raft_a_tui::raft_loop::RaftLoopError>>,
+    handle: thread::JoinHandle<Result<(), raft_core::raft_loop::RaftLoopError>>,
 }
 
 impl TestNode {
     /// Send a command to this node.
     fn send_command(&self, cmd: UserCommand) {
-        self.cmd_tx.send(cmd).unwrap();
+        self.cmd_tx.send(ServerCommand::User(cmd)).unwrap();
     }
 
     /// Get the latest Raft state (non-blocking).
@@ -199,12 +199,7 @@ fn wait_for_leader(nodes: &[&TestNode], timeout: Duration) -> Option<u64> {
 }
 
 /// Wait for all nodes to have a specific key-value pair (with timeout).
-fn wait_for_replication(
-    nodes: &[&TestNode],
-    key: &str,
-    value: &str,
-    timeout: Duration,
-) -> bool {
+fn wait_for_replication(nodes: &[&TestNode], key: &str, value: &str, timeout: Duration) -> bool {
     let start = std::time::Instant::now();
 
     while start.elapsed() < timeout {
@@ -364,8 +359,7 @@ fn test_follower_campaign_becomes_leader() {
 
     // 2. Wait for initial leader election
     println!("Waiting for initial leader election...");
-    let initial_leader_id =
-        wait_for_leader(&[&node1, &node2, &node3], Duration::from_secs(5));
+    let initial_leader_id = wait_for_leader(&[&node1, &node2, &node3], Duration::from_secs(5));
 
     assert!(
         initial_leader_id.is_some(),
@@ -383,10 +377,7 @@ fn test_follower_campaign_becomes_leader() {
         _ => panic!("Invalid leader ID: {}", initial_leader_id),
     };
 
-    println!(
-        "\nCampaigning with follower node {}...",
-        follower_id
-    );
+    println!("\nCampaigning with follower node {}...", follower_id);
 
     // 4. Call CAMPAIGN on the follower
     follower_node.send_command(UserCommand::Campaign);

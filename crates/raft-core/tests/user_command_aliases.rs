@@ -1,4 +1,4 @@
-use raft_a_tui::commands::{UserCommand, parse_command};
+use raft_core::commands::{UserCommand, parse_command};
 
 #[test]
 fn test_put_alias() {

@@ -1,4 +1,4 @@
-use raft_a_tui::node::Node;
+use raft_core::node::Node;
 
 #[test]
 fn test_snapshot_unicode_data() {

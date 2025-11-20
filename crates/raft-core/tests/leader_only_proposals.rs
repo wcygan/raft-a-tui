@@ -1,7 +1,8 @@
 use raft::StateRole;
-use raft_a_tui::raft_node::RaftNode;
-use raft_a_tui::storage::RaftStorage;
+use raft_core::raft_node::RaftNode;
+use raft_core::storage::RaftStorage;
 use slog::{Drain, Logger, o};
+use tokio::sync::oneshot;
 
 fn create_logger() -> Logger {
     let decorator = slog_term::TermDecorator::new().build();
@@ -24,7 +25,8 @@ fn test_follower_rejects_proposals() {
     assert!(!node.is_leader());
 
     // Attempt to propose a command as follower
-    let result = node.propose_command("key".to_string(), "value".to_string());
+    let (tx, _rx) = oneshot::channel();
+    let result = node.propose_command("key".to_string(), "value".to_string(), Some(tx));
 
     // Should fail with ProposalDropped
     assert!(result.is_err());
@@ -88,16 +90,15 @@ fn test_leader_accepts_proposals() {
     assert_eq!(node.get_state().role, StateRole::Leader);
 
     // Propose a command as leader
-    let result = node.propose_command("key".to_string(), "value".to_string());
+    let (tx, mut rx) = oneshot::channel();
+    let result = node.propose_command("key".to_string(), "value".to_string(), Some(tx));
 
     // Should succeed
     assert!(result.is_ok());
 
-    // Verify we got a receiver
-    let rx = result.unwrap();
-
     // The command won't be committed yet (needs Ready processing)
-    // but the proposal should have been accepted
+    // but the proposal should have been accepted.
+    // The receiver should be empty (no result sent yet).
     assert!(rx.try_recv().is_err());
 }
 
@@ -113,9 +114,9 @@ fn test_multiple_proposals_rejected_by_follower() {
     assert!(!node.is_leader());
 
     // Try multiple proposals
-    let result1 = node.propose_command("key1".to_string(), "value1".to_string());
-    let result2 = node.propose_command("key2".to_string(), "value2".to_string());
-    let result3 = node.propose_command("key3".to_string(), "value3".to_string());
+    let result1 = node.propose_command("key1".to_string(), "value1".to_string(), None);
+    let result2 = node.propose_command("key2".to_string(), "value2".to_string(), None);
+    let result3 = node.propose_command("key3".to_string(), "value3".to_string(), None);
 
     // All should be rejected
     assert!(result1.is_err());
@@ -149,9 +150,9 @@ fn test_leader_accepts_multiple_proposals() {
     assert!(node.is_leader());
 
     // Try multiple proposals
-    let result1 = node.propose_command("key1".to_string(), "value1".to_string());
-    let result2 = node.propose_command("key2".to_string(), "value2".to_string());
-    let result3 = node.propose_command("key3".to_string(), "value3".to_string());
+    let result1 = node.propose_command("key1".to_string(), "value1".to_string(), None);
+    let result2 = node.propose_command("key2".to_string(), "value2".to_string(), None);
+    let result3 = node.propose_command("key3".to_string(), "value3".to_string(), None);
 
     // All should succeed
     assert!(result1.is_ok());
@@ -174,7 +175,7 @@ fn test_state_query_on_follower() {
     assert_eq!(state.leader_id, 0); // No leader initially
 
     // Reject proposal
-    let result = node.propose_command("test".to_string(), "123".to_string());
+    let result = node.propose_command("test".to_string(), "123".to_string(), None);
     assert!(matches!(result, Err(raft::Error::ProposalDropped)));
 
     // State should still be queryable after rejection

@@ -1,6 +1,6 @@
 use raft::prelude::*;
 use raft::storage::Storage;
-use raft_a_tui::storage::RaftStorage;
+use raft_core::storage::RaftStorage;
 
 #[test]
 fn test_new_storage_has_zero_applied_index() {

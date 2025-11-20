@@ -1,7 +1,8 @@
 use raft::StateRole;
-use raft_a_tui::raft_node::{CommandResponse, RaftNode, RaftState};
-use raft_a_tui::storage::RaftStorage;
-use slog::{Drain, Logger, o};
+use raft_core::raft_node::{RaftNode, RaftState};
+use raft_core::storage::RaftStorage;
+use slog::{o, Drain, Logger};
+use tokio::sync::oneshot;
 
 fn create_logger() -> Logger {
     let decorator = slog_term::TermDecorator::new().build();
@@ -49,24 +50,26 @@ fn test_is_leader_initially_false() {
 }
 
 #[test]
-fn test_propose_command_returns_receiver() {
+fn test_propose_command_api() {
     let storage = RaftStorage::new();
     let logger = create_logger();
     let peers = vec![1];
 
     let mut node = RaftNode::new(1, peers, storage, logger).unwrap();
 
+    // Create a callback channel
+    let (tx, mut _rx) = oneshot::channel();
+
     // Note: Proposals will fail with ProposalDropped if node is not leader
     // For this test, we just verify the method signature works correctly
-    // The proposal may succeed or fail depending on leadership state
-    let result = node.propose_command("key".to_string(), "value".to_string());
+    let result = node.propose_command("key".to_string(), "value".to_string(), Some(tx));
 
-    // The result may be Ok (proposal queued) or Err (ProposalDropped)
-    // Either is acceptable for testing the API
+    // The result may be Ok or Err(ProposalDropped) depending on internal state updates
+    // Since we just created it, it is a follower, so it should drop the proposal.
     match result {
-        Ok(rx) => {
-            // If Ok, receiver should not have a message yet (not committed)
-            assert!(rx.try_recv().is_err());
+        Ok(_) => {
+            // Unexpected for a follower
+            panic!("Follower accepted proposal");
         }
         Err(raft::Error::ProposalDropped) => {
             // Expected if node is not leader
@@ -76,31 +79,19 @@ fn test_propose_command_returns_receiver() {
 }
 
 #[test]
-fn test_propose_command_unique_ids() {
+fn test_propose_command_without_callback() {
     let storage = RaftStorage::new();
     let logger = create_logger();
     let peers = vec![1];
 
     let mut node = RaftNode::new(1, peers, storage, logger).unwrap();
 
-    // Propose multiple commands
-    // They may fail with ProposalDropped if node is not leader
-    let result1 = node.propose_command("key1".to_string(), "value1".to_string());
-    let result2 = node.propose_command("key2".to_string(), "value2".to_string());
+    // Propose without callback
+    let result = node.propose_command("key".to_string(), "value".to_string(), None);
 
-    // Both proposals should have the same result (both dropped or both queued)
-    match (result1, result2) {
-        (Ok(rx1), Ok(rx2)) => {
-            // Both receivers should be valid (different callback IDs)
-            assert!(rx1.try_recv().is_err());
-            assert!(rx2.try_recv().is_err());
-        }
-        (Err(raft::Error::ProposalDropped), Err(raft::Error::ProposalDropped)) => {
-            // Both dropped - expected if not leader
-        }
-        _ => {
-            // Inconsistent state - should not happen
-            panic!("Inconsistent proposal results");
+    if let Err(e) = result {
+        if !matches!(e, raft::Error::ProposalDropped) {
+            panic!("Unexpected error: {:?}", e);
         }
     }
 }
@@ -164,28 +155,6 @@ fn test_raft_state_equality() {
     };
 
     assert_eq!(state1, state2);
-}
-
-#[test]
-fn test_command_response_equality() {
-    let resp1 = CommandResponse::Success {
-        key: "test".to_string(),
-        value: "123".to_string(),
-    };
-
-    let resp2 = CommandResponse::Success {
-        key: "test".to_string(),
-        value: "123".to_string(),
-    };
-
-    assert_eq!(resp1, resp2);
-
-    let err1 = CommandResponse::Error("failed".to_string());
-    let err2 = CommandResponse::Error("failed".to_string());
-
-    assert_eq!(err1, err2);
-
-    assert_ne!(resp1, err1);
 }
 
 #[test]
