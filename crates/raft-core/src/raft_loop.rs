@@ -5,6 +5,7 @@ use raft::prelude::*;
 use slog::{debug, error, info, warn};
 
 use crate::commands::{RpcCommand, ServerCommand, UserCommand};
+use crate::entry_applicator::{EntryApplicator, KvEntryApplicator};
 use crate::network::{Transport, TransportError};
 use crate::node::Node;
 use crate::raft_node::{RaftNode, RaftState};
@@ -445,120 +446,8 @@ impl<T: Transport> RaftDriver<T> {
     }
 
     fn apply_committed_entries(&mut self, entries: Vec<Entry>) -> Result<(), RaftLoopError> {
-        for entry in entries {
-            if entry.data.is_empty() {
-                continue;
-            }
-
-            match entry.get_entry_type() {
-                EntryType::EntryNormal => {
-                    match self.kv_node.apply_kv_command(&entry.data) {
-                        Ok(_) => {
-                            debug!(self.logger, "Applied KV command"; "index" => entry.index);
-                            self.notify_kv_update(&entry);
-                        }
-                        Err(e) => {
-                            warn!(self.logger, "Failed to apply KV command"; "error" => format!("{}", e));
-                            if let Some(callback) = self.raft_node.take_callback(&entry.context) {
-                                let _ = callback.send(Err(format!("Apply failed: {}", e)));
-                            }
-                        }
-                    }
-                    if let Err(e) = self
-                        .raft_node
-                        .raw_node_mut()
-                        .mut_store()
-                        .set_applied_index(entry.index)
-                    {
-                        error!(self.logger, "Failed to set applied index"; "error" => format!("{}", e));
-                        return Err(RaftLoopError::StorageError(e));
-                    }
-                }
-                EntryType::EntryConfChange => {
-                    info!(self.logger, "Applying configuration change"; "index" => entry.index);
-                    let mut cc = ConfChange::default();
-                    if let Err(e) = prost_011::Message::merge(&mut cc, &entry.data[..]) {
-                        error!(self.logger, "Failed to decode ConfChange"; "error" => format!("{}", e));
-                        continue;
-                    }
-
-                    let cs = match self.raft_node.raw_node_mut().apply_conf_change(&cc) {
-                        Ok(cs) => cs,
-                        Err(e) => {
-                            error!(self.logger, "Failed to apply ConfChange"; "error" => format!("{}", e));
-                            continue;
-                        }
-                    };
-
-                    if let Err(e) = self.raft_node.raw_node_mut().mut_store().set_conf_state(cs) {
-                        error!(self.logger, "Failed to persist ConfState"; "error" => format!("{}", e));
-                        return Err(RaftLoopError::StorageError(e));
-                    }
-
-                    if let Err(e) = self
-                        .raft_node
-                        .raw_node_mut()
-                        .mut_store()
-                        .set_applied_index(entry.index)
-                    {
-                        error!(self.logger, "Failed to set applied index"; "error" => format!("{}", e));
-                        return Err(RaftLoopError::StorageError(e));
-                    }
-                }
-                EntryType::EntryConfChangeV2 => {
-                    info!(self.logger, "Applying configuration change V2"; "index" => entry.index);
-                    let mut cc = ConfChangeV2::default();
-                    if let Err(e) = prost_011::Message::merge(&mut cc, &entry.data[..]) {
-                        error!(self.logger, "Failed to decode ConfChangeV2"; "error" => format!("{}", e));
-                        continue;
-                    }
-
-                    let cs = match self.raft_node.raw_node_mut().apply_conf_change(&cc) {
-                        Ok(cs) => cs,
-                        Err(e) => {
-                            error!(self.logger, "Failed to apply ConfChangeV2"; "error" => format!("{}", e));
-                            continue;
-                        }
-                    };
-
-                    if let Err(e) = self.raft_node.raw_node_mut().mut_store().set_conf_state(cs) {
-                        error!(self.logger, "Failed to persist ConfState"; "error" => format!("{}", e));
-                        return Err(RaftLoopError::StorageError(e));
-                    }
-
-                    if let Err(e) = self
-                        .raft_node
-                        .raw_node_mut()
-                        .mut_store()
-                        .set_applied_index(entry.index)
-                    {
-                        error!(self.logger, "Failed to set applied index"; "error" => format!("{}", e));
-                        return Err(RaftLoopError::StorageError(e));
-                    }
-                }
-            }
-        }
-        Ok(())
-    }
-
-    fn notify_kv_update(&mut self, entry: &Entry) {
-        if let Ok(cmd) = crate::codec::decode::<raft_proto::kvraft::KvCommand>(&entry.data) {
-            if let Some(raft_proto::kvraft::kv_command::Cmd::Put(put)) = cmd.cmd {
-                let _ = self.state_tx.send(StateUpdate::KvUpdate {
-                    key: put.key.clone(),
-                    value: put.value.clone(),
-                });
-                let _ = self.state_tx.send(StateUpdate::LogEntry {
-                    index: entry.index,
-                    term: entry.term,
-                    data: format!("PUT {} = {}", put.key, put.value),
-                });
-
-                if let Some(callback) = self.raft_node.take_callback(&entry.context) {
-                    let _ = callback.send(Ok(()));
-                }
-            }
-        }
+        let mut applicator = KvEntryApplicator::new(&mut self.kv_node, &self.state_tx, &self.logger);
+        applicator.apply_entries(entries, &mut self.raft_node)
     }
 
     fn update_tui_state(&mut self) {
