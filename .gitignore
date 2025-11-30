@@ -1,3 +1,4 @@
 /target
 node-*.log
 /data
+.idea
