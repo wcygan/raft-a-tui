@@ -11,6 +11,9 @@ pub mod ready_processor;
 pub mod storage;
 pub mod tcp_transport;
 
+#[cfg(any(test, feature = "test-support"))]
+pub mod test_support;
+
 // Re-exports
 pub use command_handler::CommandHandler;
 pub use entry_applicator::EntryApplicator;
