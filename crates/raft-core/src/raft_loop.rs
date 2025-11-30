@@ -2,14 +2,15 @@ use std::time::{Duration, Instant};
 
 use crossbeam_channel::{select, Receiver, Sender};
 use raft::prelude::*;
-use slog::{debug, error, info, warn};
+use slog::{debug, info, warn};
 
 use crate::command_handler::CommandHandler;
-use crate::commands::{RpcCommand, ServerCommand, UserCommand};
-use crate::entry_applicator::{EntryApplicator, KvEntryApplicator};
+use crate::commands::ServerCommand;
+use crate::entry_applicator::KvEntryApplicator;
 use crate::network::{Transport, TransportError};
 use crate::node::Node;
 use crate::raft_node::{RaftNode, RaftState};
+use crate::ready_processor::{DefaultReadyProcessor, ReadyProcessor};
 
 /// State updates sent to the TUI for visualization.
 ///
@@ -213,157 +214,17 @@ impl<T: Transport> RaftDriver<T> {
     }
 
     fn process_ready(&mut self) -> Result<(), RaftLoopError> {
-        let mut ready = self.raft_node.raw_node_mut().ready();
+        let mut entry_applicator = KvEntryApplicator::new(&mut self.kv_node, &self.state_tx, &self.logger);
 
-        debug!(self.logger, "Processing Ready state";
-               "has_snapshot" => !ready.snapshot().is_empty(),
-               "num_entries" => ready.entries().len(),
-               "num_messages" => ready.messages().len(),
-               "num_persisted_messages" => ready.persisted_messages().len(),
-               "num_committed" => ready.committed_entries().len());
+        let mut processor = DefaultReadyProcessor::new(
+            &mut self.raft_node,
+            &self.transport,
+            &mut entry_applicator,
+            &self.state_tx,
+            &self.logger,
+            &mut self.previous_leader_id,
+        );
 
-        self.send_messages(ready.take_messages());
-
-        if !ready.snapshot().is_empty() {
-            self.apply_snapshot(ready.snapshot().clone())?;
-        }
-
-        if !ready.entries().is_empty() {
-            debug!(self.logger, "Appending entries to storage"; "count" => ready.entries().len());
-            if let Err(e) = self
-                .raft_node
-                .raw_node_mut()
-                .mut_store()
-                .append(ready.entries())
-            {
-                error!(self.logger, "Failed to append entries"; "error" => format!("{}", e));
-                return Err(RaftLoopError::StorageError(e));
-            }
-        }
-
-        if let Some(hs) = ready.hs() {
-            debug!(self.logger, "Persisting HardState"; "term" => hs.term, "vote" => hs.vote, "commit" => hs.commit);
-            if let Err(e) = self
-                .raft_node
-                .raw_node_mut()
-                .mut_store()
-                .set_hardstate(hs.clone())
-            {
-                error!(self.logger, "Failed to persist HardState"; "error" => format!("{}", e));
-                return Err(RaftLoopError::StorageError(e));
-            }
-        }
-
-        self.send_messages(ready.take_persisted_messages());
-
-        let committed_entries = ready.take_committed_entries();
-        if !committed_entries.is_empty() {
-            self.apply_committed_entries(committed_entries)?;
-        }
-
-        self.update_tui_state();
-
-        let mut light_rd = self.raft_node.raw_node_mut().advance(ready);
-
-        if let Some(commit) = light_rd.commit_index() {
-            debug!(self.logger, "LightReady commit index"; "commit" => commit);
-        }
-
-        self.send_messages(light_rd.messages().to_vec());
-
-        let light_committed = light_rd.take_committed_entries();
-        if !light_committed.is_empty() {
-            self.apply_committed_entries(light_committed)?;
-        }
-
-        Ok(())
-    }
-
-    fn apply_snapshot(&mut self, snapshot: Snapshot) -> Result<(), RaftLoopError> {
-        let snapshot_index = snapshot.get_metadata().index;
-        let snapshot_term = snapshot.get_metadata().term;
-
-        info!(self.logger, "Applying snapshot"; "index" => snapshot_index, "term" => snapshot_term);
-
-        if let Err(e) = self
-            .raft_node
-            .raw_node_mut()
-            .mut_store()
-            .apply_snapshot(snapshot.clone())
-        {
-            error!(self.logger, "Failed to apply snapshot"; "error" => format!("{}", e));
-            return Err(RaftLoopError::StorageError(e));
-        }
-
-        let snapshot_data = snapshot.get_data();
-        if let Err(e) = self.kv_node.restore_from_snapshot(snapshot_data) {
-            error!(self.logger, "Failed to restore KV state from snapshot"; "error" => format!("{}", e));
-            return Err(RaftLoopError::Other(format!(
-                "Snapshot restore failed: {}",
-                e
-            )));
-        }
-
-        if let Err(e) = self
-            .raft_node
-            .raw_node_mut()
-            .mut_store()
-            .set_applied_index(snapshot_index)
-        {
-            error!(self.logger, "Failed to set applied index"; "error" => format!("{}", e));
-            return Err(RaftLoopError::StorageError(e));
-        }
-
-        info!(self.logger, "Snapshot applied successfully");
-        let _ = self.state_tx.send(StateUpdate::SystemMessage(format!(
-            "📸 Applied snapshot at index {} (term {})",
-            snapshot_index, snapshot_term
-        )));
-
-        Ok(())
-    }
-
-    fn send_messages(&self, messages: Vec<Message>) {
-        if messages.is_empty() {
-            return;
-        }
-        debug!(self.logger, "Sending messages"; "count" => messages.len());
-
-        for msg in messages {
-            let to = msg.to;
-            if let Err(e) = self.transport.send(to, msg) {
-                warn!(self.logger, "Failed to send message"; "peer" => to, "error" => format!("{}", e));
-            }
-        }
-    }
-
-    fn apply_committed_entries(&mut self, entries: Vec<Entry>) -> Result<(), RaftLoopError> {
-        let mut applicator = KvEntryApplicator::new(&mut self.kv_node, &self.state_tx, &self.logger);
-        applicator.apply_entries(entries, &mut self.raft_node)
-    }
-
-    fn update_tui_state(&mut self) {
-        let raft_state = self.raft_node.get_state();
-
-        if let Some(prev_leader) = self.previous_leader_id {
-            if prev_leader != raft_state.leader_id && raft_state.leader_id != 0 {
-                let msg = if prev_leader == 0 {
-                    format!(
-                        "New leader elected: {} (term {})",
-                        raft_state.leader_id, raft_state.term
-                    )
-                } else {
-                    format!(
-                        "Leadership changed: {} → {} (term {})",
-                        prev_leader, raft_state.leader_id, raft_state.term
-                    )
-                };
-                info!(self.logger, "Leadership changed"; "new_leader" => raft_state.leader_id);
-                let _ = self.state_tx.send(StateUpdate::SystemMessage(msg));
-            }
-        }
-        self.previous_leader_id = Some(raft_state.leader_id);
-
-        let _ = self.state_tx.send(StateUpdate::RaftState(raft_state));
+        processor.process_ready()
     }
 }

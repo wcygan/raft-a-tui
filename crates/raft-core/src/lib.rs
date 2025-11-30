@@ -7,6 +7,7 @@ pub mod network;
 pub mod node;
 pub mod raft_loop;
 pub mod raft_node;
+pub mod ready_processor;
 pub mod storage;
 pub mod tcp_transport;
 
@@ -14,3 +15,4 @@ pub mod tcp_transport;
 pub use command_handler::CommandHandler;
 pub use entry_applicator::EntryApplicator;
 pub use raft_loop::StateUpdate;
+pub use ready_processor::ReadyProcessor;
