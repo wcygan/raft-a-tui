@@ -1,4 +1,5 @@
 pub mod codec;
+pub mod command_handler;
 pub mod commands;
 pub mod disk_storage;
 pub mod entry_applicator;
@@ -10,5 +11,6 @@ pub mod storage;
 pub mod tcp_transport;
 
 // Re-exports
+pub use command_handler::CommandHandler;
 pub use entry_applicator::EntryApplicator;
 pub use raft_loop::StateUpdate;
