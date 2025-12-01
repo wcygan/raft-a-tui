@@ -19,5 +19,6 @@ pub mod test_support;
 pub use builder::{BuilderError, RaftDriverBuilder};
 pub use command_handler::CommandHandler;
 pub use entry_applicator::EntryApplicator;
+pub use raft::prelude::Message as RaftMessage;
 pub use raft_loop::StateUpdate;
 pub use ready_processor::ReadyProcessor;

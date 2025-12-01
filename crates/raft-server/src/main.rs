@@ -247,26 +247,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     eprintln!("Cluster: {} nodes", peer_ids.len());
 
     // 4. Create Raft storage (persistent by default, or in-memory with :memory:)
-    let storage = match args.data_dir.as_deref() {
-        Some(":memory:") => {
-            eprintln!("Using in-memory storage (no persistence)");
-            slog::info!(logger, "Using in-memory storage");
-            RaftStorage::new()
-        }
-        data_dir => {
-            let path = data_dir
-                .map(|s| s.to_string())
-                .unwrap_or_else(|| format!("./data/node-{}", args.id));
-
-            // Create directory if it doesn't exist
-            std::fs::create_dir_all(&path)?;
-
-            eprintln!("Using persistent storage: {}", path);
-            slog::info!(logger, "Using persistent storage"; "path" => &path);
-
-            RaftStorage::new_with_disk(&path)?
-        }
-    };
+    let storage = create_storage(args.data_dir.as_deref(), args.id, &logger)?;
 
     // 5. Create Raft node
     let raft_node = RaftNode::new(args.id, peer_ids, storage, logger.clone())?;
@@ -286,68 +267,21 @@ fn main() -> Result<(), Box<dyn Error>> {
     eprintln!("Transport listening on {}", my_addr);
     eprintln!();
 
-    // Calculate gRPC address (port + 1000)
-    let mut grpc_addr = my_addr;
-    grpc_addr.set_port(grpc_addr.port() + 1000);
-
-    let rpc_cmd_tx = cmd_tx.clone();
-    // Create a map of peers with their gRPC ports (raft port + 1000)
-    // This ensures clients are redirected to the API port, not the internal Raft port
-    let rpc_peers_map: std::collections::HashMap<_, _> = peers_map
-        .iter()
-        .map(|(id, addr)| {
-            let mut addr = *addr;
-            addr.set_port(addr.port() + 1000);
-            (*id, addr)
-        })
-        .collect();
-
     // Spawn gRPC server in background thread
-    thread::spawn(move || {
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        rt.block_on(async {
-            let service = RaftKvService {
-                cmd_tx: rpc_cmd_tx,
-                peers_map: rpc_peers_map,
-            };
-
-            eprintln!("gRPC API listening on {}", grpc_addr);
-
-            Server::builder()
-                .add_service(KeyValueServiceServer::new(service))
-                .serve(grpc_addr)
-                .await
-                .unwrap();
-        });
-    });
+    spawn_grpc_server(my_addr, peers_map.clone(), cmd_tx.clone());
 
     // 8. Spawn Raft ready loop thread
-    let raft_logger = logger.clone();
-    let raft_handle = thread::Builder::new()
-        .name(format!("raft-ready-loop-{}", args.id))
-        .spawn(move || {
-            slog::info!(raft_logger, "Raft ready loop starting");
-            let driver = raft_core::RaftDriverBuilder::new()
-                .raft_node(raft_node)
-                .kv_node(kv_node)
-                .cmd_rx(cmd_rx)
-                .msg_rx(msg_rx)
-                .state_tx(state_tx)
-                .transport(transport)
-                .shutdown_rx(shutdown_rx)
-                .build()
-                .expect("Failed to build RaftDriver");
-            let result = driver.run();
-
-            match &result {
-                Ok(_) => slog::info!(raft_logger, "Raft ready loop exited cleanly"),
-                Err(e) => {
-                    slog::error!(raft_logger, "Raft ready loop error"; "error" => format!("{}", e))
-                }
-            }
-
-            result
-        })?;
+    let raft_handle = spawn_raft_loop(
+        args.id,
+        raft_node,
+        kv_node,
+        cmd_rx,
+        msg_rx,
+        state_tx,
+        transport,
+        shutdown_rx,
+        logger.clone(),
+    )?;
 
     // 9. Create and run TUI
     let mut app = App::new(args.id, state_rx, cmd_tx, shutdown_tx);
@@ -363,6 +297,119 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     slog::info!(logger, "Node shutdown complete");
     Ok(())
+}
+
+/// Spawn the Raft ready loop in a background thread.
+///
+/// Returns a JoinHandle for the Raft thread.
+fn spawn_raft_loop(
+    node_id: u64,
+    raft_node: RaftNode,
+    kv_node: Node,
+    cmd_rx: Receiver<ServerCommand>,
+    msg_rx: Receiver<raft_core::RaftMessage>,
+    state_tx: Sender<StateUpdate>,
+    transport: TcpTransport,
+    shutdown_rx: Receiver<()>,
+    logger: Logger,
+) -> Result<thread::JoinHandle<Result<(), raft_core::raft_loop::RaftLoopError>>, std::io::Error> {
+    thread::Builder::new()
+        .name(format!("raft-ready-loop-{}", node_id))
+        .spawn(move || {
+            slog::info!(logger, "Raft ready loop starting");
+            let driver = raft_core::RaftDriverBuilder::new()
+                .raft_node(raft_node)
+                .kv_node(kv_node)
+                .cmd_rx(cmd_rx)
+                .msg_rx(msg_rx)
+                .state_tx(state_tx)
+                .transport(transport)
+                .shutdown_rx(shutdown_rx)
+                .build()
+                .expect("Failed to build RaftDriver");
+            let result = driver.run();
+
+            match &result {
+                Ok(_) => slog::info!(logger, "Raft ready loop exited cleanly"),
+                Err(e) => slog::error!(logger, "Raft ready loop error"; "error" => format!("{}", e)),
+            }
+
+            result
+        })
+}
+
+/// Spawn the gRPC server in a background thread.
+///
+/// The gRPC server listens on (raft_port + 1000) and provides the KV API.
+fn spawn_grpc_server(
+    my_addr: std::net::SocketAddr,
+    peers_map: std::collections::HashMap<u64, std::net::SocketAddr>,
+    cmd_tx: Sender<ServerCommand>,
+) {
+    // Calculate gRPC address (port + 1000)
+    let mut grpc_addr = my_addr;
+    grpc_addr.set_port(grpc_addr.port() + 1000);
+
+    // Create a map of peers with their gRPC ports (raft port + 1000)
+    let rpc_peers_map: std::collections::HashMap<_, _> = peers_map
+        .iter()
+        .map(|(id, addr)| {
+            let mut addr = *addr;
+            addr.set_port(addr.port() + 1000);
+            (*id, addr)
+        })
+        .collect();
+
+    thread::spawn(move || {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let service = RaftKvService {
+                cmd_tx,
+                peers_map: rpc_peers_map,
+            };
+
+            eprintln!("gRPC API listening on {}", grpc_addr);
+
+            Server::builder()
+                .add_service(KeyValueServiceServer::new(service))
+                .serve(grpc_addr)
+                .await
+                .unwrap();
+        });
+    });
+}
+
+/// Create Raft storage (persistent or in-memory).
+///
+/// # Arguments
+/// * `data_dir` - Path to data directory, ":memory:" for in-memory, or None for default
+/// * `node_id` - Node ID for default path generation
+/// * `logger` - Logger for status messages
+fn create_storage(
+    data_dir: Option<&str>,
+    node_id: u64,
+    logger: &Logger,
+) -> Result<RaftStorage, Box<dyn Error>> {
+    match data_dir {
+        Some(":memory:") => {
+            eprintln!("Using in-memory storage (no persistence)");
+            slog::info!(logger, "Using in-memory storage");
+            Ok(RaftStorage::new())
+        }
+        data_dir => {
+            let path = data_dir
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| format!("./data/node-{}", node_id));
+
+            // Create directory if it doesn't exist
+            std::fs::create_dir_all(&path)?;
+
+            eprintln!("Using persistent storage: {}", path);
+            slog::info!(logger, "Using persistent storage"; "path" => &path);
+
+            Ok(RaftStorage::new_with_disk(&path)?)
+        }
+    }
 }
 
 /// Setup slog logger with file output.
