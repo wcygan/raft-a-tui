@@ -1,3 +1,4 @@
+pub mod builder;
 pub mod codec;
 pub mod command_handler;
 pub mod commands;
@@ -15,6 +16,7 @@ pub mod tcp_transport;
 pub mod test_support;
 
 // Re-exports
+pub use builder::{BuilderError, RaftDriverBuilder};
 pub use command_handler::CommandHandler;
 pub use entry_applicator::EntryApplicator;
 pub use raft_loop::StateUpdate;

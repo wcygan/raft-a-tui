@@ -22,7 +22,7 @@ use crate::cli::{parse_peers, Args};
 use crate::server::RaftKvService;
 use raft_core::commands::{parse_command, ServerCommand};
 use raft_core::node::Node;
-use raft_core::raft_loop::{RaftDriver, StateUpdate};
+use raft_core::raft_loop::StateUpdate;
 use raft_core::raft_node::{RaftNode, RaftState};
 use raft_core::storage::RaftStorage;
 use raft_core::tcp_transport::TcpTransport;
@@ -327,15 +327,16 @@ fn main() -> Result<(), Box<dyn Error>> {
         .name(format!("raft-ready-loop-{}", args.id))
         .spawn(move || {
             slog::info!(raft_logger, "Raft ready loop starting");
-            let driver = RaftDriver::new(
-                raft_node,
-                kv_node,
-                cmd_rx,
-                msg_rx,
-                state_tx,
-                transport,
-                shutdown_rx,
-            );
+            let driver = raft_core::RaftDriverBuilder::new()
+                .raft_node(raft_node)
+                .kv_node(kv_node)
+                .cmd_rx(cmd_rx)
+                .msg_rx(msg_rx)
+                .state_tx(state_tx)
+                .transport(transport)
+                .shutdown_rx(shutdown_rx)
+                .build()
+                .expect("Failed to build RaftDriver");
             let result = driver.run();
 
             match &result {

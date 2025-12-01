@@ -11,6 +11,7 @@ use raft_core::node::Node;
 use raft_core::raft_loop::{RaftDriver, RaftLoopError, StateUpdate};
 use raft_core::raft_node::RaftNode;
 use raft_core::storage::RaftStorage;
+use raft_core::RaftDriverBuilder;
 use slog::o;
 
 /// Helper wrapper to adapt tests to RaftDriver
@@ -23,15 +24,16 @@ fn raft_ready_loop<T: Transport>(
     transport: T,
     shutdown_rx: Receiver<()>,
 ) -> Result<(), RaftLoopError> {
-    let driver = RaftDriver::new(
-        raft_node,
-        kv_node,
-        cmd_rx,
-        msg_rx,
-        state_tx,
-        transport,
-        shutdown_rx,
-    );
+    let driver = RaftDriverBuilder::new()
+        .raft_node(raft_node)
+        .kv_node(kv_node)
+        .cmd_rx(cmd_rx)
+        .msg_rx(msg_rx)
+        .state_tx(state_tx)
+        .transport(transport)
+        .shutdown_rx(shutdown_rx)
+        .build()
+        .expect("Failed to build RaftDriver in test");
     driver.run()
 }
 

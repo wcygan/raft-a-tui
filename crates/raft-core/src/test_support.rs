@@ -5,10 +5,16 @@
 
 use raft::prelude::{Entry, Message};
 
+use crate::builder::RaftDriverBuilder;
+use crate::commands::ServerCommand;
 use crate::entry_applicator::EntryApplicator;
-use crate::network::{Transport, TransportError};
-use crate::raft_loop::RaftLoopError;
+use crate::network::{LocalTransport, Transport, TransportError};
+use crate::node::Node;
+use crate::raft_loop::{RaftDriver, RaftLoopError, StateUpdate};
 use crate::raft_node::RaftNode;
+use crate::storage::RaftStorage;
+use crossbeam_channel::{unbounded, Receiver, SendError, Sender};
+use std::collections::HashMap;
 
 /// Mock transport that always fails with ChannelFull error.
 ///
@@ -171,5 +177,120 @@ mod tests {
 
         applicator.clear();
         assert_eq!(applicator.num_applied(), 0);
+    }
+}
+
+/// Test harness that wraps RaftDriver with all necessary channel handles.
+///
+/// Provides convenient access to send commands and receive state updates
+/// without needing TCP connections.
+pub struct RaftDriverTestHarness<T: Transport> {
+    pub driver: RaftDriver<T>,
+    pub cmd_tx: Sender<ServerCommand>,
+    pub msg_tx: Sender<Message>,
+    pub state_rx: Receiver<StateUpdate>,
+    pub shutdown_tx: Sender<()>,
+}
+
+impl RaftDriverTestHarness<LocalTransport> {
+    /// Creates a single-node test harness with LocalTransport.
+    ///
+    /// # Arguments
+    /// * `node_id` - The ID for the single node
+    ///
+    /// # Example
+    /// ```
+    /// use raft_core::test_support::RaftDriverTestHarness;
+    ///
+    /// let harness = RaftDriverTestHarness::single_node(1);
+    /// // Now you can send commands and check state updates
+    /// ```
+    pub fn single_node(node_id: u64) -> Self {
+        let logger = slog::Logger::root(slog::Discard, slog::o!());
+        let storage = RaftStorage::new();
+        let raft_node = RaftNode::new(node_id, vec![node_id], storage, logger).unwrap();
+        let kv_node = Node::new();
+
+        let (cmd_tx, cmd_rx) = unbounded();
+        let (msg_tx, msg_rx) = unbounded();
+        let (state_tx, state_rx) = unbounded();
+        let (shutdown_tx, shutdown_rx) = unbounded();
+
+        // LocalTransport with no peers (single node)
+        let transport = LocalTransport::new(node_id, HashMap::new());
+
+        let driver = RaftDriverBuilder::new()
+            .raft_node(raft_node)
+            .kv_node(kv_node)
+            .cmd_rx(cmd_rx)
+            .msg_rx(msg_rx)
+            .state_tx(state_tx)
+            .transport(transport)
+            .shutdown_rx(shutdown_rx)
+            .build()
+            .expect("Failed to build RaftDriver in test harness");
+
+        Self {
+            driver,
+            cmd_tx,
+            msg_tx,
+            state_rx,
+            shutdown_tx,
+        }
+    }
+}
+
+impl<T: Transport> RaftDriverTestHarness<T> {
+    /// Creates a test harness with a custom transport.
+    ///
+    /// # Arguments
+    /// * `node_id` - The ID for the node
+    /// * `transport` - Custom transport implementation
+    ///
+    /// # Example
+    /// ```
+    /// use raft_core::test_support::{RaftDriverTestHarness, FailingTransport};
+    ///
+    /// let harness = RaftDriverTestHarness::with_transport(1, FailingTransport);
+    /// ```
+    pub fn with_transport(node_id: u64, transport: T) -> Self {
+        let logger = slog::Logger::root(slog::Discard, slog::o!());
+        let storage = RaftStorage::new();
+        let raft_node = RaftNode::new(node_id, vec![node_id], storage, logger).unwrap();
+        let kv_node = Node::new();
+
+        let (cmd_tx, cmd_rx) = unbounded();
+        let (msg_tx, msg_rx) = unbounded();
+        let (state_tx, state_rx) = unbounded();
+        let (shutdown_tx, shutdown_rx) = unbounded();
+
+        let driver = RaftDriverBuilder::new()
+            .raft_node(raft_node)
+            .kv_node(kv_node)
+            .cmd_rx(cmd_rx)
+            .msg_rx(msg_rx)
+            .state_tx(state_tx)
+            .transport(transport)
+            .shutdown_rx(shutdown_rx)
+            .build()
+            .expect("Failed to build RaftDriver in test harness");
+
+        Self {
+            driver,
+            cmd_tx,
+            msg_tx,
+            state_rx,
+            shutdown_tx,
+        }
+    }
+
+    /// Send a command to the driver.
+    pub fn send_command(&self, cmd: ServerCommand) -> Result<(), SendError<ServerCommand>> {
+        self.cmd_tx.send(cmd)
+    }
+
+    /// Trigger shutdown of the driver.
+    pub fn shutdown(&self) {
+        let _ = self.shutdown_tx.send(());
     }
 }

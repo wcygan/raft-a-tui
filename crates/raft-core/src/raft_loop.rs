@@ -115,7 +115,10 @@ pub struct RaftDriver<T: Transport> {
 }
 
 impl<T: Transport> RaftDriver<T> {
-    pub fn new(
+    /// Private constructor called by RaftDriverBuilder.
+    ///
+    /// Use `RaftDriverBuilder` to construct a RaftDriver instance.
+    pub(crate) fn from_parts(
         raft_node: RaftNode,
         kv_node: Node,
         cmd_rx: Receiver<ServerCommand>,
