@@ -3,6 +3,7 @@ use std::time::{Duration, Instant};
 use crossbeam_channel::{select, Receiver, Sender};
 use raft::prelude::*;
 use slog::{debug, info, warn};
+use thiserror::Error;
 
 use crate::command_handler::CommandHandler;
 use crate::commands::ServerCommand;
@@ -29,35 +30,31 @@ pub enum StateUpdate {
 }
 
 /// Errors that can occur in the Raft ready loop.
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum RaftLoopError {
-    /// A critical channel was closed unexpectedly.
-    ChannelClosed(String),
+    /// The command channel (cmd_rx) was closed.
+    #[error("Command channel closed unexpectedly")]
+    CommandChannelClosed,
+
+    /// The message channel (msg_rx) was closed.
+    #[error("Message channel closed unexpectedly")]
+    MessageChannelClosed,
+
     /// Storage operation failed.
-    StorageError(raft::Error),
+    #[error("Storage error: {0}")]
+    Storage(#[from] raft::Error),
+
     /// Transport failed (non-fatal, logged and continued).
-    TransportError(TransportError),
-    /// Other errors.
+    #[error("Transport error: {0}")]
+    Transport(#[from] TransportError),
+
+    /// Protobuf decode error.
+    #[error("Failed to decode protobuf: {0}")]
+    ProtobufDecode(#[from] prost::DecodeError),
+
+    /// Other errors with context.
+    #[error("{0}")]
     Other(String),
-}
-
-impl std::fmt::Display for RaftLoopError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            RaftLoopError::ChannelClosed(msg) => write!(f, "Channel closed: {}", msg),
-            RaftLoopError::StorageError(e) => write!(f, "Storage error: {}", e),
-            RaftLoopError::TransportError(e) => write!(f, "Transport error: {}", e),
-            RaftLoopError::Other(msg) => write!(f, "Error: {}", msg),
-        }
-    }
-}
-
-impl std::error::Error for RaftLoopError {}
-
-impl From<raft::Error> for RaftLoopError {
-    fn from(err: raft::Error) -> Self {
-        RaftLoopError::StorageError(err)
-    }
 }
 
 /// The main Raft ready loop.
@@ -157,7 +154,7 @@ impl<T: Transport> RaftDriver<T> {
                         Ok(cmd) => self.handle_command(cmd)?,
                         Err(_) => {
                             info!(self.logger, "Command channel closed, shutting down");
-                            return Err(RaftLoopError::ChannelClosed("cmd_rx".to_string()));
+                            return Err(RaftLoopError::CommandChannelClosed);
                         }
                     }
                 },
@@ -166,7 +163,7 @@ impl<T: Transport> RaftDriver<T> {
                         Ok(msg) => self.handle_raft_message(msg)?,
                         Err(_) => {
                             info!(self.logger, "Message channel closed, shutting down");
-                            return Err(RaftLoopError::ChannelClosed("msg_rx".to_string()));
+                            return Err(RaftLoopError::MessageChannelClosed);
                         }
                     }
                 },

@@ -153,8 +153,9 @@ fn test_ready_loop_handles_cmd_rx_closed() {
 
     if let Err(e) = result {
         assert!(
-            e.to_string().contains("cmd_rx"),
-            "Error should mention cmd_rx"
+            e.to_string().contains("Command channel"),
+            "Error should mention Command channel: {}",
+            e
         );
     }
 }
@@ -192,8 +193,9 @@ fn test_ready_loop_handles_msg_rx_closed() {
 
     if let Err(e) = result {
         assert!(
-            e.to_string().contains("msg_rx"),
-            "Error should mention msg_rx"
+            e.to_string().contains("Message channel"),
+            "Error should mention Message channel: {}",
+            e
         );
     }
 }

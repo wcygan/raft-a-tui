@@ -66,7 +66,7 @@ impl<'a> KvEntryApplicator<'a> {
             .set_applied_index(entry.index)
             .map_err(|e| {
                 error!(self.logger, "Failed to set applied index"; "error" => format!("{}", e));
-                RaftLoopError::StorageError(e)
+                RaftLoopError::Storage(e)
             })
     }
 
@@ -97,7 +97,7 @@ impl<'a> KvEntryApplicator<'a> {
             .set_conf_state(cs)
             .map_err(|e| {
                 error!(self.logger, "Failed to persist ConfState"; "error" => format!("{}", e));
-                RaftLoopError::StorageError(e)
+                RaftLoopError::Storage(e)
             })?;
 
         raft_node
@@ -106,7 +106,7 @@ impl<'a> KvEntryApplicator<'a> {
             .set_applied_index(entry.index)
             .map_err(|e| {
                 error!(self.logger, "Failed to set applied index"; "error" => format!("{}", e));
-                RaftLoopError::StorageError(e)
+                RaftLoopError::Storage(e)
             })
     }
 
@@ -137,7 +137,7 @@ impl<'a> KvEntryApplicator<'a> {
             .set_conf_state(cs)
             .map_err(|e| {
                 error!(self.logger, "Failed to persist ConfState"; "error" => format!("{}", e));
-                RaftLoopError::StorageError(e)
+                RaftLoopError::Storage(e)
             })?;
 
         raft_node
@@ -146,7 +146,7 @@ impl<'a> KvEntryApplicator<'a> {
             .set_applied_index(entry.index)
             .map_err(|e| {
                 error!(self.logger, "Failed to set applied index"; "error" => format!("{}", e));
-                RaftLoopError::StorageError(e)
+                RaftLoopError::Storage(e)
             })
     }
 

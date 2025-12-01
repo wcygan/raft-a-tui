@@ -17,6 +17,7 @@ uuid = { version = "1.11.0", features = ["v4"] }
 sled = "0.34"
 bincode = "2.0.1"
 serde = { version = "1.0.228", features = ["derive"] }
+thiserror = "2"
 
 # Local
 raft-proto = { path = "../raft-proto" }

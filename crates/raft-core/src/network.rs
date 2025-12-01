@@ -2,31 +2,23 @@ use std::collections::HashMap;
 
 use crossbeam_channel::{Sender, TrySendError};
 use raft::prelude::Message;
+use thiserror::Error;
 
 /// Error types for transport operations.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum TransportError {
     /// The target peer ID is not registered in the transport.
+    #[error("Peer {0} not found in transport")]
     PeerNotFound(u64),
+
     /// The channel to the peer is full (bounded channel limit reached).
+    #[error("Channel to peer {0} is full (message dropped)")]
     ChannelFull(u64),
+
     /// The channel to the peer has been closed (peer disconnected).
+    #[error("Channel to peer {0} is closed")]
     ChannelClosed(u64),
 }
-
-impl std::fmt::Display for TransportError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            TransportError::PeerNotFound(id) => write!(f, "Peer {} not found in transport", id),
-            TransportError::ChannelFull(id) => {
-                write!(f, "Channel to peer {} is full (message dropped)", id)
-            }
-            TransportError::ChannelClosed(id) => write!(f, "Channel to peer {} is closed", id),
-        }
-    }
-}
-
-impl std::error::Error for TransportError {}
 
 /// Transport abstraction for sending Raft messages between nodes.
 ///

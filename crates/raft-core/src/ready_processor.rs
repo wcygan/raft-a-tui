@@ -77,7 +77,7 @@ impl<'a, T: Transport, A: EntryApplicator> DefaultReadyProcessor<'a, T, A> {
             .apply_snapshot(snapshot.clone())
             .map_err(|e| {
                 error!(self.logger, "Failed to apply snapshot"; "error" => format!("{}", e));
-                RaftLoopError::StorageError(e)
+                RaftLoopError::Storage(e)
             })?;
 
         let snapshot_data = snapshot.get_data();
@@ -89,7 +89,7 @@ impl<'a, T: Transport, A: EntryApplicator> DefaultReadyProcessor<'a, T, A> {
             .set_applied_index(snapshot_index)
             .map_err(|e| {
                 error!(self.logger, "Failed to set applied index"; "error" => format!("{}", e));
-                RaftLoopError::StorageError(e)
+                RaftLoopError::Storage(e)
             })?;
 
         info!(self.logger, "Snapshot applied successfully");
@@ -109,7 +109,7 @@ impl<'a, T: Transport, A: EntryApplicator> DefaultReadyProcessor<'a, T, A> {
             .append(entries)
             .map_err(|e| {
                 error!(self.logger, "Failed to append entries"; "error" => format!("{}", e));
-                RaftLoopError::StorageError(e)
+                RaftLoopError::Storage(e)
             })
     }
 
@@ -121,7 +121,7 @@ impl<'a, T: Transport, A: EntryApplicator> DefaultReadyProcessor<'a, T, A> {
             .set_hardstate(hs)
             .map_err(|e| {
                 error!(self.logger, "Failed to persist HardState"; "error" => format!("{}", e));
-                RaftLoopError::StorageError(e)
+                RaftLoopError::Storage(e)
             })
     }
 
