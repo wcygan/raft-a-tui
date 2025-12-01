@@ -1,15 +1,15 @@
-use raft_core::node::Node;
+use raft_core::node::{encode_put_command, Node};
 
 #[test]
 fn test_snapshot_unicode_data() {
     // Test with Unicode characters (emoji, Chinese, etc.)
     let mut node = Node::new();
 
-    node.apply_kv_command(&Node::encode_put_command("emoji", "🚀🎉💾"))
+    node.apply_kv_command(&encode_put_command("emoji", "🚀🎉💾"))
         .unwrap();
-    node.apply_kv_command(&Node::encode_put_command("chinese", "你好世界"))
+    node.apply_kv_command(&encode_put_command("chinese", "你好世界"))
         .unwrap();
-    node.apply_kv_command(&Node::encode_put_command("arabic", "مرحبا"))
+    node.apply_kv_command(&encode_put_command("arabic", "مرحبا"))
         .unwrap();
 
     let snapshot = node.create_snapshot().expect("Failed to create snapshot");
@@ -38,13 +38,13 @@ fn test_snapshot_special_characters() {
     // Test with special characters that might break serialization
     let mut node = Node::new();
 
-    node.apply_kv_command(&Node::encode_put_command("newlines", "line1\nline2\nline3"))
+    node.apply_kv_command(&encode_put_command("newlines", "line1\nline2\nline3"))
         .unwrap();
-    node.apply_kv_command(&Node::encode_put_command("tabs", "col1\tcol2\tcol3"))
+    node.apply_kv_command(&encode_put_command("tabs", "col1\tcol2\tcol3"))
         .unwrap();
-    node.apply_kv_command(&Node::encode_put_command("quotes", r#"He said "hello""#))
+    node.apply_kv_command(&encode_put_command("quotes", r#"He said "hello""#))
         .unwrap();
-    node.apply_kv_command(&Node::encode_put_command("backslashes", r"C:\path\to\file"))
+    node.apply_kv_command(&encode_put_command("backslashes", r"C:\path\to\file"))
         .unwrap();
 
     let snapshot = node.create_snapshot().expect("Failed to create snapshot");
@@ -72,7 +72,7 @@ fn test_snapshot_very_long_keys_and_values() {
     let long_key = "key_".to_string() + &"x".repeat(10_000);
     let long_value = "value_".to_string() + &"y".repeat(10_000);
 
-    node.apply_kv_command(&Node::encode_put_command(&long_key, &long_value))
+    node.apply_kv_command(&encode_put_command(&long_key, &long_value))
         .unwrap();
 
     let snapshot = node.create_snapshot().expect("Failed to create snapshot");
@@ -91,7 +91,7 @@ fn test_snapshot_empty_keys_and_values() {
     let mut node = Node::new();
 
     // Empty value
-    node.apply_kv_command(&Node::encode_put_command("empty_value", ""))
+    node.apply_kv_command(&encode_put_command("empty_value", ""))
         .unwrap();
 
     let snapshot = node.create_snapshot().expect("Failed to create snapshot");
@@ -112,9 +112,9 @@ fn test_multiple_snapshots_same_node() {
     // Creating multiple snapshots should be deterministic
     let mut node = Node::new();
 
-    node.apply_kv_command(&Node::encode_put_command("a", "1"))
+    node.apply_kv_command(&encode_put_command("a", "1"))
         .unwrap();
-    node.apply_kv_command(&Node::encode_put_command("b", "2"))
+    node.apply_kv_command(&encode_put_command("b", "2"))
         .unwrap();
 
     let snap1 = node.create_snapshot().expect("Failed to create snapshot1");
@@ -130,22 +130,22 @@ fn test_restore_multiple_times() {
     // Restoring multiple snapshots in sequence
     let mut node1 = Node::new();
     node1
-        .apply_kv_command(&Node::encode_put_command("state", "v1"))
+        .apply_kv_command(&encode_put_command("state", "v1"))
         .unwrap();
     let snap1 = node1.create_snapshot().unwrap();
 
     let mut node2 = Node::new();
     node2
-        .apply_kv_command(&Node::encode_put_command("state", "v2"))
+        .apply_kv_command(&encode_put_command("state", "v2"))
         .unwrap();
     node2
-        .apply_kv_command(&Node::encode_put_command("extra", "data"))
+        .apply_kv_command(&encode_put_command("extra", "data"))
         .unwrap();
     let snap2 = node2.create_snapshot().unwrap();
 
     let mut node3 = Node::new();
     node3
-        .apply_kv_command(&Node::encode_put_command("state", "v3"))
+        .apply_kv_command(&encode_put_command("state", "v3"))
         .unwrap();
     let snap3 = node3.create_snapshot().unwrap();
 
@@ -170,9 +170,9 @@ fn test_snapshot_after_clear() {
     let mut node = Node::new();
 
     // Add data
-    node.apply_kv_command(&Node::encode_put_command("key1", "value1"))
+    node.apply_kv_command(&encode_put_command("key1", "value1"))
         .unwrap();
-    node.apply_kv_command(&Node::encode_put_command("key2", "value2"))
+    node.apply_kv_command(&encode_put_command("key2", "value2"))
         .unwrap();
 
     // Clear via empty snapshot
@@ -185,7 +185,7 @@ fn test_snapshot_after_clear() {
     // Restore to another node
     let mut node2 = Node::new();
     node2
-        .apply_kv_command(&Node::encode_put_command("temp", "data"))
+        .apply_kv_command(&encode_put_command("temp", "data"))
         .unwrap();
 
     node2.restore_from_snapshot(&snapshot).unwrap();
@@ -200,7 +200,7 @@ fn test_snapshot_preserves_exact_state() {
     for i in 0..100 {
         let key = format!("k{:03}", i);
         let value = format!("v{}", i);
-        node.apply_kv_command(&Node::encode_put_command(&key, &value))
+        node.apply_kv_command(&encode_put_command(&key, &value))
             .unwrap();
     }
 
@@ -230,7 +230,7 @@ fn test_snapshot_binary_data() {
     let binary_data = vec![0xFF, 0xFE, 0xFD, 0x00, 0x01, 0x02];
     let hex_encoded = hex::encode(&binary_data);
 
-    node.apply_kv_command(&Node::encode_put_command("binary", &hex_encoded))
+    node.apply_kv_command(&encode_put_command("binary", &hex_encoded))
         .unwrap();
 
     let snapshot = node.create_snapshot().unwrap();
@@ -255,7 +255,7 @@ fn test_snapshot_size_growth() {
 
     // Verify snapshot size grows as we add data
     for i in 1..=5 {
-        node.apply_kv_command(&Node::encode_put_command(
+        node.apply_kv_command(&encode_put_command(
             &format!("key{}", i),
             &"x".repeat(100),
         ))
@@ -278,11 +278,11 @@ fn test_snapshot_with_duplicate_keys() {
     let mut node = Node::new();
 
     // Insert key1 multiple times with different values
-    node.apply_kv_command(&Node::encode_put_command("key1", "value1"))
+    node.apply_kv_command(&encode_put_command("key1", "value1"))
         .unwrap();
-    node.apply_kv_command(&Node::encode_put_command("key1", "value2"))
+    node.apply_kv_command(&encode_put_command("key1", "value2"))
         .unwrap();
-    node.apply_kv_command(&Node::encode_put_command("key1", "value3"))
+    node.apply_kv_command(&encode_put_command("key1", "value3"))
         .unwrap();
 
     let snapshot = node.create_snapshot().unwrap();

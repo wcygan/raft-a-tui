@@ -1,6 +1,5 @@
 use raft_core::commands::UserCommand;
-use raft_core::node::Node;
-use raft_core::node::NodeOutput::Text;
+use raft_core::node::{encode_put_command, Node, NodeOutput::Text};
 
 #[test]
 fn test_put_and_get() {
@@ -59,7 +58,7 @@ fn test_apply_kv_command_via_protobuf() {
     let mut node = Node::new();
 
     // prost-based encoded KvCommand::Put
-    let data = Node::encode_put_command("hello", "world");
+    let data = encode_put_command("hello", "world");
     node.apply_kv_command(&data).unwrap();
 
     assert_eq!(node.get_internal_map().get("hello"), Some(&"world".into()));

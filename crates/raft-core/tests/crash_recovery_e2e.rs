@@ -1,5 +1,5 @@
 use raft::Storage;
-use raft_core::node::Node;
+use raft_core::node::{encode_put_command, Node};
 use raft_core::raft_node::RaftNode;
 use raft_core::storage::RaftStorage;
 use slog::{o, Drain, Logger};
@@ -33,13 +33,13 @@ fn test_single_node_crash_recovery() {
         // Create KV node and apply some commands
         let mut kv_node = Node::new();
         kv_node
-            .apply_kv_command(&Node::encode_put_command("key1", "value1"))
+            .apply_kv_command(&encode_put_command("key1", "value1"))
             .unwrap();
         kv_node
-            .apply_kv_command(&Node::encode_put_command("key2", "value2"))
+            .apply_kv_command(&encode_put_command("key2", "value2"))
             .unwrap();
         kv_node
-            .apply_kv_command(&Node::encode_put_command("key3", "value3"))
+            .apply_kv_command(&encode_put_command("key3", "value3"))
             .unwrap();
 
         // Create and persist snapshot

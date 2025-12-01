@@ -110,8 +110,8 @@ impl RaftNode {
         // Generate unique callback ID
         let callback_id = Uuid::new_v4().as_bytes().to_vec();
 
-        // Encode the command using Node's helper
-        let data = crate::node::Node::encode_put_command(&key, &value);
+        // Encode the command
+        let data = crate::node::encode_put_command(&key, &value);
 
         // Store callback if provided
         if let Some(cb) = callback {

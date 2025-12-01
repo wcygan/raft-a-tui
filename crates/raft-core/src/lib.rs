@@ -9,6 +9,7 @@ pub mod node;
 pub mod raft_loop;
 pub mod raft_node;
 pub mod ready_processor;
+pub mod snapshot;
 pub mod storage;
 pub mod tcp_transport;
 

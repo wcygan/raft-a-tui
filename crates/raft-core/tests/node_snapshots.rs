@@ -1,4 +1,4 @@
-use raft_core::node::Node;
+use raft_core::node::{encode_put_command, Node};
 
 #[test]
 fn test_snapshot_roundtrip_empty() {
@@ -12,7 +12,7 @@ fn test_snapshot_roundtrip_empty() {
     let mut restored_node = Node::new();
     // Add some data first to verify it gets cleared
     restored_node
-        .apply_kv_command(&Node::encode_put_command("temp", "data"))
+        .apply_kv_command(&encode_put_command("temp", "data"))
         .unwrap();
 
     restored_node
@@ -30,7 +30,7 @@ fn test_snapshot_roundtrip_empty() {
 fn test_snapshot_roundtrip_single_entry() {
     // Node with 1 entry → snapshot → restore → verify identical
     let mut node = Node::new();
-    node.apply_kv_command(&Node::encode_put_command("key1", "value1"))
+    node.apply_kv_command(&encode_put_command("key1", "value1"))
         .unwrap();
 
     let snapshot = node.create_snapshot().expect("Failed to create snapshot");
@@ -59,7 +59,7 @@ fn test_snapshot_roundtrip_multiple_entries() {
     for i in 0..10 {
         let key = format!("key{}", i);
         let value = format!("value{}", i);
-        node.apply_kv_command(&Node::encode_put_command(&key, &value))
+        node.apply_kv_command(&encode_put_command(&key, &value))
             .unwrap();
     }
 
@@ -84,11 +84,11 @@ fn test_snapshot_preserves_btree_ordering() {
     let mut node = Node::new();
 
     // Insert in non-alphabetical order
-    node.apply_kv_command(&Node::encode_put_command("zebra", "z"))
+    node.apply_kv_command(&encode_put_command("zebra", "z"))
         .unwrap();
-    node.apply_kv_command(&Node::encode_put_command("apple", "a"))
+    node.apply_kv_command(&encode_put_command("apple", "a"))
         .unwrap();
-    node.apply_kv_command(&Node::encode_put_command("mango", "m"))
+    node.apply_kv_command(&encode_put_command("mango", "m"))
         .unwrap();
 
     let snapshot = node.create_snapshot().expect("Failed to create snapshot");
@@ -116,7 +116,7 @@ fn test_snapshot_large_dataset() {
     for i in 0..1000 {
         let key = format!("key{:04}", i);
         let value = format!("value{}", i);
-        node.apply_kv_command(&Node::encode_put_command(&key, &value))
+        node.apply_kv_command(&encode_put_command(&key, &value))
             .unwrap();
     }
 
@@ -168,15 +168,15 @@ fn test_restore_replaces_existing_state() {
     // Verify that restore REPLACES state, not merges
     let mut node1 = Node::new();
     node1
-        .apply_kv_command(&Node::encode_put_command("key1", "value1"))
+        .apply_kv_command(&encode_put_command("key1", "value1"))
         .unwrap();
     node1
-        .apply_kv_command(&Node::encode_put_command("key2", "value2"))
+        .apply_kv_command(&encode_put_command("key2", "value2"))
         .unwrap();
 
     let mut node2 = Node::new();
     node2
-        .apply_kv_command(&Node::encode_put_command("key3", "value3"))
+        .apply_kv_command(&encode_put_command("key3", "value3"))
         .unwrap();
 
     let snapshot1 = node1.create_snapshot().expect("Failed to create snapshot");
@@ -205,9 +205,9 @@ fn test_restore_replaces_existing_state() {
 fn test_empty_snapshot_clears_state() {
     // Empty snapshot should clear all existing state
     let mut node = Node::new();
-    node.apply_kv_command(&Node::encode_put_command("key1", "value1"))
+    node.apply_kv_command(&encode_put_command("key1", "value1"))
         .unwrap();
-    node.apply_kv_command(&Node::encode_put_command("key2", "value2"))
+    node.apply_kv_command(&encode_put_command("key2", "value2"))
         .unwrap();
 
     assert_eq!(node.get_internal_map().len(), 2, "Node should have 2 entries");
@@ -227,7 +227,7 @@ fn test_empty_snapshot_clears_state() {
 fn test_snapshot_idempotent() {
     // Creating multiple snapshots of same state should produce identical results
     let mut node = Node::new();
-    node.apply_kv_command(&Node::encode_put_command("key1", "value1"))
+    node.apply_kv_command(&encode_put_command("key1", "value1"))
         .unwrap();
 
     let snapshot1 = node.create_snapshot().expect("Failed to create snapshot1");

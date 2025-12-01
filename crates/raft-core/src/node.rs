@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 
 use crate::codec::{decode, encode};
 use crate::commands::UserCommand;
+use crate::snapshot::{BincodeCodec, SnapshotCodec, SnapshotError};
 use raft_proto::kvraft::{kv_command, KvCommand, Put};
 
 /// Output from a user command.
@@ -11,21 +12,46 @@ pub enum NodeOutput {
     None,
 }
 
-pub struct Node {
-    kv: BTreeMap<String, String>,
+/// Helper to encode a KvCommand::Put entry for Raft.
+pub fn encode_put_command(key: &str, value: &str) -> Vec<u8> {
+    use kv_command::Cmd;
+    let put = Put {
+        key: key.into(),
+        value: value.into(),
+    };
+    let cmd = KvCommand {
+        cmd: Some(Cmd::Put(put)),
+    };
+    encode(&cmd)
 }
 
-impl Default for Node {
+pub struct Node<C: SnapshotCodec = BincodeCodec> {
+    kv: BTreeMap<String, String>,
+    codec: C,
+}
+
+impl Default for Node<BincodeCodec> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl Node {
-    /// Create a new KV node with empty state.
+impl Node<BincodeCodec> {
+    /// Create a new KV node with empty state and default BincodeCodec.
     pub fn new() -> Self {
         Self {
             kv: BTreeMap::new(),
+            codec: BincodeCodec,
+        }
+    }
+}
+
+impl<C: SnapshotCodec> Node<C> {
+    /// Create a new KV node with empty state and a custom codec.
+    pub fn with_codec(codec: C) -> Self {
+        Self {
+            kv: BTreeMap::new(),
+            codec,
         }
     }
 
@@ -73,19 +99,6 @@ impl Node {
         Ok(())
     }
 
-    /// Helper to encode a KvCommand::Put entry for Raft.
-    pub fn encode_put_command(key: &str, value: &str) -> Vec<u8> {
-        use kv_command::Cmd;
-        let put = Put {
-            key: key.into(),
-            value: value.into(),
-        };
-        let cmd = KvCommand {
-            cmd: Some(Cmd::Put(put)),
-        };
-        encode(&cmd)
-    }
-
     /// Helper for tests (and later debug UI)
     pub fn get_internal_map(&self) -> &BTreeMap<String, String> {
         &self.kv
@@ -93,15 +106,15 @@ impl Node {
 
     /// Create a snapshot of the current KV state.
     ///
-    /// Returns bincode-encoded BTreeMap<String, String>.
+    /// Uses the configured codec to serialize the BTreeMap<String, String>.
     /// This snapshot can be used to restore state after a crash or to
     /// bring a new node up to date with the cluster.
     ///
     /// # Returns
     /// - `Ok(Vec<u8>)` - Serialized snapshot data
-    /// - `Err(...)` - Serialization error (should never happen for BTreeMap)
-    pub fn create_snapshot(&self) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
-        bincode::encode_to_vec(&self.kv, bincode::config::standard()).map_err(|e| e.into())
+    /// - `Err(SnapshotError)` - Serialization error
+    pub fn create_snapshot(&self) -> Result<Vec<u8>, SnapshotError> {
+        self.codec.encode(&self.kv)
     }
 
     /// Restore KV state from a snapshot.
@@ -110,25 +123,17 @@ impl Node {
     /// Raft semantics - a snapshot is an authoritative point-in-time state.
     ///
     /// # Arguments
-    /// * `data` - Bincode-encoded BTreeMap<String, String> from create_snapshot()
+    /// * `data` - Encoded snapshot from create_snapshot()
     ///
     /// # Returns
     /// - `Ok(())` - State successfully restored
-    /// - `Err(...)` - Deserialization error (malformed snapshot data)
+    /// - `Err(SnapshotError)` - Deserialization error (malformed snapshot data)
     ///
     /// # Behavior
     /// - Empty snapshot (0 bytes) → clears all state (empty KV store)
     /// - Non-empty snapshot → replaces all state with snapshot contents
-    pub fn restore_from_snapshot(&mut self, data: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
-        if data.is_empty() {
-            // Empty snapshot = empty state
-            self.kv.clear();
-            return Ok(());
-        }
-
-        let (restored, _bytes_read): (BTreeMap<String, String>, usize) =
-            bincode::decode_from_slice(data, bincode::config::standard())?;
-
+    pub fn restore_from_snapshot(&mut self, data: &[u8]) -> Result<(), SnapshotError> {
+        let restored = self.codec.decode(data)?;
         // Replace entire state (correct Raft semantics)
         self.kv = restored;
         Ok(())
